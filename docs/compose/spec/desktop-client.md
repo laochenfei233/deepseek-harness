@@ -3,7 +3,7 @@ feature: desktop-client
 status: in-progress
 updated: 2026-08-24
 branch: feat/tauri-desktop
-commits: # filled at delivery
+commits: b150a551b..24886839c
 ---
 
 # Desktop Client（Tauri 全平台桌面客户端）
@@ -134,11 +134,11 @@ apps/desktop/
 
 ## Tasks
 
-- [ ] T1: 建立 fork 仓库与 worktree（master 同步上游，分支 feat/tauri-desktop） — acceptance: `git pull upstream` 无冲突，四 preset 文件在位（covers: S1）
-- [ ] T2: 编写本 spec — acceptance: 全部设计节有覆盖任务，无 TBD（covers: S1, S2）
-- [ ] T3: 实现 `apps/desktop/src-tauri`（WebView + dsh 子进程管理 + 托盘 + host.openPath RPC + 崩溃重启） — acceptance: `cargo build`/`tauri build` 通过，`dsh web --no-open` 由壳拉起且 WebView 加载 3080（covers: S2.1, S2.3）
-- [ ] T4: 实现顶部导航栏 UI 与 dsh-tauri 协议桥 — acceptance: 三控件收发 postMessage 与协议一致（covers: S2.2）
-- [ ] T5: 实现首次启动向导（预设四选一 + 默认/可选插件安装） — acceptance: 向导生成 profile 与插件安装命令按 2.5 表执行且可重入（covers: S2.5）
-- [ ] T6: 实现 `scripts/bundle-runtime.mjs`（Node runtime + 裁剪 dsh 运行环境 + 内置 pnpm） — acceptance: 产物目录可离线运行 `dsh web --no-open` 且四 preset 在位（covers: S2.4）
-- [ ] T7: 实现 `.github/workflows/desktop-release.yml`（三平台 matrix + tauri-action + release）与 `desktop-sync.yml` — acceptance: workflow 语法有效，dry-run 触发能走到打包步骤（covers: S2.7；depends: T3, T6）
+- [x] T1: 建立 fork 仓库与 worktree（master 同步上游，分支 feat/tauri-desktop） — acceptance: `git pull upstream` 无冲突，四 preset 文件在位（covers: S1）
+- [x] T2: 编写本 spec — acceptance: 全部设计节有覆盖任务，无 TBD（covers: S1, S2）
+- [x] T3: 实现 `apps/desktop/src-tauri`（WebView + dsh 子进程管理 + 托盘 + host.openPath RPC + 崩溃重启） — acceptance: `cargo build`/`tauri build` 通过，`dsh web --no-open` 由壳拉起且 WebView 加载 3080（covers: S2.1, S2.3）
+- [x] T4: 实现顶部导航栏 UI 与 dsh-tauri 协议桥 — acceptance: 三控件收发 postMessage 与协议一致（covers: S2.2）
+- [x] T5: 实现首次启动向导（预设四选一 + 默认/可选插件安装） — acceptance: 向导生成 profile 与插件安装命令按 2.5 表执行且可重入（covers: S2.5）
+- [x] T6: 实现 `scripts/bundle-runtime.mjs`（Node runtime + 裁剪 dsh 运行环境 + 内置 pnpm） — acceptance: 产物目录可离线运行 `dsh web --no-open` 且四 preset 在位（covers: S2.4）
+- [x] T7: 实现 `.github/workflows/desktop-release.yml`（三平台 matrix + tauri-action + release）与 `desktop-sync.yml` — acceptance: workflow 语法有效，dry-run 触发能走到打包步骤（covers: S2.7；depends: T3, T6）
 - [ ] T8: 验证桌面端四 preset 可用与插件安装/更新路径 — acceptance: 壳内切换 preset 生成不同 agent 组合；dsh-market 安装/更新插件成功（covers: S2.6；depends: T3, T5, T6）
