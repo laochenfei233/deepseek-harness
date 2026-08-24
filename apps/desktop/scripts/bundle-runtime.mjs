@@ -204,13 +204,21 @@ function copyPkgContents(src, dest) {
   rmSync(dest, { recursive: true, force: true });
   mkdirSync(dirname(dest), { recursive: true });
   // dereference: store entries are symlinks; copy the contents, not the link
-  // (a copied relative link would dangle at the top-level location). Exclude
-  // only entries *named* node_modules — the source root path itself contains
-  // node_modules segments and must not be filtered out.
+  // (a copied relative link would dangle at the top-level location). Drop
+  // type declarations, source maps, tests and docs: the runtime never reads
+  // them, they bloat the bundle, and type-declaration file names exceed
+  // Windows' path limit inside the installer.
   cpSync(src, dest, {
     recursive: true,
     dereference: true,
-    filter: (s) => s.split(/[\\/]/).pop() !== 'node_modules',
+    filter: (s) => {
+      const parts = s.split(/[\\/]/);
+      const last = parts.pop();
+      if (last === 'node_modules') return false;
+      if (last === 'test' || last === 'tests' || last === 'docs' || last === 'coverage' || last === '.github') return false;
+      if (last.endsWith('.d.ts') || last.endsWith('.d.cts') || last.endsWith('.d.mts') || last.endsWith('.map')) return false;
+      return true;
+    },
   });
 }
 

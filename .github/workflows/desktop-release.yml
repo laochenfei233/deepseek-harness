@@ -67,6 +67,16 @@ jobs:
         working-directory: apps/desktop
         run: node scripts/bundle-runtime.mjs --platform ${{ matrix.runtime-platform }}
 
+      # The tauri CLI runs a workspace-level `pnpm install --production` deps
+      # check that executes the repo root postinstall (lefthook) and fails
+      # without devDependencies. Hide the workspace declarations around the
+      # tauri build; the shell has no workspace memberships of its own.
+      - name: Hide workspace root from tauri deps check
+        shell: bash
+        run: |
+          mv pnpm-workspace.yaml pnpm-workspace.yaml.bak
+          node -e 'const fs=require("fs");const p="package.json";const j=JSON.parse(fs.readFileSync(p,"utf8"));delete j.workspaces;fs.writeFileSync(p,JSON.stringify(j,null,2)+"\n")'
+
       - name: Build Tauri app and upload to Release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -80,3 +90,10 @@ jobs:
             首次启动向导默认安装插件市场与 Windows 终端检测，可选 IM 频道（企微/飞书/钉钉/微信/QQ）等插件。
           releaseDraft: true
           prerelease: false
+
+      - name: Restore workspace declarations
+        if: always()
+        shell: bash
+        run: |
+          mv -f pnpm-workspace.yaml.bak pnpm-workspace.yaml
+          git checkout -- package.json
