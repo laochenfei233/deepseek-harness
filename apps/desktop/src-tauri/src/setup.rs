@@ -105,7 +105,7 @@ fn write_preset_patch(home: &Path, preset: &str) -> Result<(), String> {
     }
     if !found {
         rows.push(serde_yaml::from_str(&format!(
-            "- id: {PRESET_ROW_ID}\n  config:\n    default: {preset}\n"
+            "id: {PRESET_ROW_ID}\nconfig:\n  default: {preset}\n"
         )).map_err(|e| format!("build patch row: {e}"))?);
     }
 
@@ -155,10 +155,13 @@ fn install_plugin_sync(app: &AppHandle, spec: &str) -> Result<String, String> {
 
 fn install_local_plugin(app: &AppHandle, name: &str) -> Result<String, String> {
     let runtime_plugins = runtime_plugins_dir(app)?;
-    let src = runtime_plugins.join(name);
-    if !src.exists() {
-        return Err(format!("bundled plugin {name} not found in runtime"));
-    }
+    // The runtime plugin directory keeps the repo-style `dsh-` name prefix;
+    // accept both the wizard's short id and the actual directory name.
+    let src = ["dsh-", ""]
+        .iter()
+        .map(|prefix| runtime_plugins.join(format!("{prefix}{name}")))
+        .find(|p| p.exists())
+        .ok_or_else(|| format!("bundled plugin {name} not found in runtime"))?;
     let home = dsh_home();
     let dest = profile_web_dir(&home).join("plugins").join(name);
     fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
@@ -181,12 +184,67 @@ fn install_local_plugin(app: &AppHandle, name: &str) -> Result<String, String> {
     });
     if !exists {
         rows.push(serde_yaml::from_str(
-            "- insert:\n    - id: win-terminal-inspector\n      name: ./plugins/dsh-win-terminal-inspector/index.js\n",
+            "insert:\n  - id: win-terminal-inspector\n    name: ./plugins/dsh-win-terminal-inspector/index.js\n",
         ).map_err(|e| format!("build patch row: {e}"))?);
         fs::write(&patch_path, serde_yaml::to_string(&rows).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
     }
     Ok(format!("installed {name}"))
+}
+
+/// Preinstalled default plugins (plugin market + Windows terminal
+/// inspector). The shell copies them from the bundled runtime into the web
+/// profile on first launch — the wizard no longer installs them.
+pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
+    let home = dsh_home();
+    let profile = profile_web_dir(&home);
+    let runtime_plugins = match runtime_plugins_dir(app) {
+        Ok(dir) => dir,
+        Err(_) => return Ok(()), // dev without bundled plugins: nothing to preinstall
+    };
+
+    let defaults: &[(&str, &str)] = &[
+        ("dshmarket", "./plugins/dshmarket/node_modules/dshmarket"),
+        ("dsh-win-terminal-inspector", "./plugins/dsh-win-terminal-inspector/index.js"),
+    ];
+    for (dir_name, patch_name) in defaults {
+        let src = runtime_plugins.join(dir_name);
+        if !src.exists() {
+            continue;
+        }
+        let dest = profile.join("plugins").join(dir_name);
+        if !dest.exists() {
+            fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
+            copy_dir(&src, &dest)?;
+        }
+    }
+
+    let patch_path = profile.join("cordis.patch.yml");
+    let mut rows: Vec<Yaml> = fs::read_to_string(&patch_path)
+        .ok()
+        .and_then(|raw| serde_yaml::from_str(&raw).ok())
+        .unwrap_or_default();
+    if !has_patch_row(&rows, "dshmarket") {
+        rows.push(serde_yaml::from_str(
+            "insert:\n  - id: dshmarket\n    name: ./plugins/dshmarket/node_modules/dshmarket/lib/index.js\n",
+        ).map_err(|e| format!("build patch row: {e}"))?);
+    }
+    if !has_patch_row(&rows, "win-terminal-inspector") {
+        rows.push(serde_yaml::from_str(
+            "insert:\n  - id: win-terminal-inspector\n    name: ./plugins/dsh-win-terminal-inspector/index.js\n",
+        ).map_err(|e| format!("build patch row: {e}"))?);
+    }
+    fs::write(&patch_path, serde_yaml::to_string(&rows).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn has_patch_row(rows: &[Yaml], id: &str) -> bool {
+    rows.iter().any(|row| {
+        row.get("insert")
+            .and_then(|ins| ins.as_sequence())
+            .is_some_and(|seq| seq.iter().any(|e| e.get("id").and_then(Yaml::as_str) == Some(id)))
+    })
 }
 
 fn runtime_plugins_dir(app: &AppHandle) -> Result<PathBuf, String> {

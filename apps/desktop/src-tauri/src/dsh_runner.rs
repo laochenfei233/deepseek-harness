@@ -126,6 +126,7 @@ impl DshHandle {
 
     async fn spawn_child(&self, app: AppHandle) -> Result<Child, String> {
         self.ensure_home_node_modules()?;
+        crate::setup::ensure_default_plugins(&app)?;
         let mut cmd = Command::new(&self.node_path);
         cmd.arg(&self.dsh_bin)
             .arg("web")

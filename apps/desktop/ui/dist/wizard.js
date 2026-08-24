@@ -9,8 +9,6 @@ const PRESETS = [
 ];
 
 const PLUGINS = [
-  { id: 'dshmarket', spec: 'dshmarket', name: '插件市场', desc: '浏览、搜索、一键安装社区插件，支持更新与备份', required: true },
-  { id: 'win-terminal-inspector', spec: 'local:win-terminal-inspector', name: 'Windows 终端检测', desc: '修复 Windows 上持久化 PTY 终端的进程监视能力', required: true, winOnly: true },
   { id: 'dsh-tauri', spec: 'dsh-tauri', name: '桌面导航桥', desc: '让顶部导航栏（侧边栏/后退/前进）控制 dsh 界面', defaultOn: true },
   { id: 'dsh-better-sidebar', spec: 'dsh-better-sidebar@latest', name: '增强侧边栏', desc: '文件工作台、真实终端、Git 面板、内嵌浏览器与子代理面板' },
   { id: 'dsh-notification', spec: 'https://github.com/omdsh-dev/dsh-notification/archive/refs/tags/v0.1.3.tar.gz', name: '桌面通知', desc: '回合完成时发送系统通知，可按结果与关键词过滤' },
@@ -24,7 +22,7 @@ const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
 const isWindows = navigator.userAgent.includes('Windows');
 
 let selectedPreset = 'standard';
-const selected = new Set(PLUGINS.filter((p) => p.required || p.defaultOn).map((p) => p.id));
+const selected = new Set(PLUGINS.filter((p) => p.defaultOn).map((p) => p.id));
 
 function renderPresets() {
   const list = document.getElementById('preset-list');

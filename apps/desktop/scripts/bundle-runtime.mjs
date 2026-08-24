@@ -229,8 +229,18 @@ function copyPkgContents(src, dest) {
 // profile gets a junction to it, see dsh_runner.rs). copyPkgContents strips
 // each package's own node_modules, so links are not followed.
 function flattenClosure() {
-  const pnpmStore = join(DSH_DIR, 'node_modules', '.pnpm');
-  const topNm = join(DSH_DIR, 'node_modules');
+  flattenNodeModules(join(DSH_DIR, 'node_modules'));
+  // The virtual store is now redundant (everything it held is at the
+  // top level); dropping it halves the bundle size.
+  rmSync(join(DSH_DIR, 'node_modules', '.pnpm'), { recursive: true, force: true });
+  step('removed .pnpm virtual store');
+}
+
+// Turn a pnpm-style node_modules (virtual store + top-level links) into a
+// traditional flat layout, so plugins copied to the user profile resolve
+// their dependencies from the top level.
+function flattenNodeModules(topNm) {
+  const pnpmStore = join(topNm, '.pnpm');
   const isDir = (p) => {
     try {
       return statSync(p).isDirectory();
@@ -240,7 +250,6 @@ function flattenClosure() {
   };
   let copied = 0;
   if (!existsSync(pnpmStore)) {
-    step('no virtual store to flatten');
     return;
   }
   for (const store of readdirSync(pnpmStore, { withFileTypes: true })
@@ -265,11 +274,7 @@ function flattenClosure() {
       }
     }
   }
-  step(`flattened ${copied} packages into top-level node_modules`);
-  // The virtual store is now redundant (everything it held is at the
-  // top level); dropping it halves the bundle size.
-  rmSync(pnpmStore, { recursive: true, force: true });
-  step('removed .pnpm virtual store');
+  step(`flattened ${copied} packages into ${topNm}`);
 }
 
 // pnpm deploy (legacy) leaves dangling symlinks for dependency-chain rows it
@@ -483,7 +488,34 @@ async function main() {
   }
   await deployDsh();
   await installWinTerminalInspector();
+  await prepareDefaultPluginDshmarket();
   writeManifest();
+}
+
+// The plugin market ships preinstalled: install its full dependency closure
+// into runtime/plugins/dshmarket (network at bundle time, offline afterwards).
+// The shell copies this directory into the web profile on first launch.
+async function prepareDefaultPluginDshmarket() {
+  const dest = join(PLUGINS_DIR, 'dshmarket');
+  rmSync(dest, { recursive: true, force: true });
+  mkdirSync(dest, { recursive: true });
+  writeFileSync(
+    join(dest, 'package.json'),
+    JSON.stringify({ name: 'dshmarket-bundle', private: true, type: 'module', dependencies: { dshmarket: 'latest' } }, null, 2),
+  );
+  // Isolate from the parent workspace so pnpm treats this as a standalone
+  // project (no purge/TTY prompts, no lefthook postinstall).
+  writeFileSync(join(dest, 'pnpm-workspace.yaml'), 'packages: []\n');
+  step('install dshmarket closure into runtime/plugins/dshmarket');
+  runPnpm(['install', '--prod', '--ignore-scripts', '--lockfile=false'], { cwd: dest });
+  const marketPkg = join(dest, 'node_modules', 'dshmarket', 'package.json');
+  if (!existsSync(marketPkg)) {
+    throw new Error('dshmarket did not install into runtime/plugins/dshmarket');
+  }
+  // Flatten the closure so a copied profile plugin resolves its own deps.
+  flattenNodeModules(join(dest, 'node_modules'));
+  rmSync(join(dest, 'node_modules', '.pnpm'), { recursive: true, force: true });
+  step('dshmarket closure installed');
 }
 
 main().catch((err) => {
