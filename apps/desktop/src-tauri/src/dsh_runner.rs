@@ -1,7 +1,7 @@
 //! Owns the bundled `dsh web` child process: spawn, port health probe,
 //! automatic crash restart, and clean teardown on app exit.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -135,7 +135,8 @@ impl DshHandle {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         // Run the CLI from its package root so relative config lookups work.
-        if let Some(root) = self.dsh_bin.parent().and_then(|p| p.parent()) {
+        let workdir = self.dsh_bin.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf());
+        if let Some(root) = &workdir {
             cmd.current_dir(root);
         }
         // Put the bundled pnpm (runtime/node/node_modules/.bin) and the deploy
@@ -151,6 +152,20 @@ impl DshHandle {
             path_parts.push(existing);
         }
         cmd.env("PATH", path_parts.join(";"));
+        // Diagnostics: record exactly what is about to be spawned.
+        if let Ok(log_dir) = app.path().app_log_dir() {
+            let _ = std::fs::create_dir_all(&log_dir);
+            let _ = std::fs::write(
+                log_dir.join("spawn-debug.log"),
+                format!(
+                    "node={}\nbin={}\ncwd={:?}\nPATH={}\n",
+                    self.node_path.display(),
+                    self.dsh_bin.display(),
+                    workdir,
+                    path_parts.join(";"),
+                ),
+            );
+        }
         let spawn_result = cmd.spawn();
         let mut child = match spawn_result {
             Ok(child) => child,
@@ -333,7 +348,7 @@ pub(crate) fn resolve_runtime(app: &AppHandle) -> Result<(PathBuf, PathBuf), Str
     let bundled_bin = runtime_root.join("dsh").join("lib").join("bin.js");
 
     if bundled_node.exists() && bundled_bin.exists() {
-        return Ok((bundled_node, bundled_bin));
+        return Ok((plain_path(&bundled_node), plain_path(&bundled_bin)));
     }
 
     // Dev fallback.
@@ -353,7 +368,19 @@ pub(crate) fn resolve_runtime(app: &AppHandle) -> Result<(PathBuf, PathBuf), Str
             "no bundled runtime found at {bundled_bin:?} and no built dsh CLI at {dsh_bin}"
         ));
     }
-    Ok((PathBuf::from(node), PathBuf::from(dsh_bin)))
+    Ok((plain_path(&PathBuf::from(node)), plain_path(&PathBuf::from(dsh_bin))))
+}
+
+/// Windows verbatim paths (`\\?\C:\...`, produced by canonicalization inside
+/// Tauri's resource_dir) crash node's main-script resolver with
+/// `EISDIR ... lstat 'C:'`. Strip the prefix so node receives a normal path.
+fn plain_path(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        p.to_path_buf()
+    }
 }
 
 #[derive(Serialize)]
