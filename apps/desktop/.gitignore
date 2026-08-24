@@ -1,0 +1,5 @@
+# Build artifacts — never commit these.
+node_modules/
+runtime/
+src-tauri/target/
+src-tauri/gen/

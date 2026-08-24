@@ -1,0 +1,36 @@
+name: desktop-sync
+
+# Pulls upstream deepseek-ai/deepseek-harness master into this fork and pushes
+# to origin. Never pushes upstream — the upstream remote is fetch-only by
+# convention. Conflicts require a human merge; the workflow fails loud.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 2 * * 1'   # weekly, Monday 02:23 UTC (staggered minute)
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git
+          git fetch upstream master
+
+      - name: Merge upstream master
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-edit upstream/master
+
+      - name: Push to origin
+        run: git push origin master

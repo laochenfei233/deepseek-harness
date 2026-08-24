@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>欢迎使用 DeepSeek Harness</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="wizard">
+  <main class="wizard-card">
+    <h1>欢迎使用 DeepSeek Harness</h1>
+    <p class="wizard-sub">选择默认智能体预设与要安装的插件。预设决定每个新会话的工具组合；插件随时可在「设置 → 插件市场」中管理。</p>
+
+    <section>
+      <h2>1. 默认预设</h2>
+      <div id="preset-list" class="preset-list"></div>
+    </section>
+
+    <section>
+      <h2>2. 插件</h2>
+      <p class="hint">必装插件（不可取消）：插件市场 <code>dshmarket</code>、Windows 终端检测 <code>dsh-win-terminal-inspector</code>。</p>
+      <div id="plugin-list" class="plugin-list"></div>
+    </section>
+
+    <div id="progress" class="progress hidden">
+      <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+      <p id="progress-text" class="hint"></p>
+    </div>
+
+    <div class="wizard-actions">
+      <button id="btn-finish" class="btn primary">开始使用</button>
+    </div>
+  </main>
+  <script src="wizard.js"></script>
+</body>
+</html>
