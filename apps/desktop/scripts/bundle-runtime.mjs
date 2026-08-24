@@ -233,7 +233,11 @@ function flattenClosure() {
   // The virtual store is now redundant (everything it held is at the
   // top level); dropping it halves the bundle size.
   rmSync(join(DSH_DIR, 'node_modules', '.pnpm'), { recursive: true, force: true });
-  step('removed .pnpm virtual store');
+  // @mistralai (optional pi-ai provider dep) ships file names that exceed
+  // Windows' path limit inside the NSIS installer; DeepSeek/other providers
+  // never load it, so drop the whole package.
+  rmSync(join(DSH_DIR, 'node_modules', '@mistralai'), { recursive: true, force: true });
+  step('removed .pnpm virtual store and @mistralai');
 }
 
 // Turn a pnpm-style node_modules (virtual store + top-level links) into a
