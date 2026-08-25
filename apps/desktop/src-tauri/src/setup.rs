@@ -79,6 +79,13 @@ fn write_state(home: &Path, preset: &str) -> Result<(), String> {
     fs::write(state_path(home), serde_json::to_string_pretty(&state).unwrap()).map_err(|e| e.to_string())
 }
 
+/// Drop non-mapping rows from a profile patch. Early shell builds wrote
+/// `- insert:` fragments that parsed as sequences; the loader rejects any
+/// non-mapping overlay entry, so self-heal on read.
+fn sanitize_rows(rows: Vec<Yaml>) -> Vec<Yaml> {
+    rows.into_iter().filter(|row| row.is_mapping()).collect()
+}
+
 fn write_preset_patch(home: &Path, preset: &str) -> Result<(), String> {
     let patch_path = profile_web_dir(home).join("cordis.patch.yml");
     fs::create_dir_all(patch_path.parent().unwrap()).map_err(|e| e.to_string())?;
@@ -87,6 +94,7 @@ fn write_preset_patch(home: &Path, preset: &str) -> Result<(), String> {
         fs::read_to_string(&patch_path)
             .ok()
             .and_then(|raw| serde_yaml::from_str(&raw).ok())
+            .map(sanitize_rows)
             .unwrap_or_default()
     } else {
         Vec::new()
@@ -224,6 +232,7 @@ pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
     let mut rows: Vec<Yaml> = fs::read_to_string(&patch_path)
         .ok()
         .and_then(|raw| serde_yaml::from_str(&raw).ok())
+        .map(sanitize_rows)
         .unwrap_or_default();
     if !has_patch_row(&rows, "dshmarket") {
         rows.push(serde_yaml::from_str(
