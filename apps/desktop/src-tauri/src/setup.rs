@@ -134,7 +134,9 @@ fn install_plugin_sync(app: &AppHandle, spec: &str) -> Result<String, String> {
     let profile_dir = profile_web_dir(&home);
     fs::create_dir_all(&profile_dir).map_err(|e| e.to_string())?;
 
-    let output = Command::new(&node)
+    let mut cmd = Command::new(&node);
+    no_window(&mut cmd);
+    let output = cmd
         .arg(&dsh_bin)
         .arg("plugin")
         .arg("--profile")
@@ -144,7 +146,6 @@ fn install_plugin_sync(app: &AppHandle, spec: &str) -> Result<String, String> {
         .current_dir(profile_dir)
         .output()
         .map_err(|e| format!("failed to run dsh plugin add: {e}"))?;
-
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     if !output.status.success() {
@@ -247,8 +248,17 @@ fn has_patch_row(rows: &[Yaml], id: &str) -> bool {
     })
 }
 
-fn runtime_plugins_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let resource_dir = app
+/// The app is a GUI process; spawned children would flash a console window.
+fn no_window(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+fn runtime_plugins_dir(app: &AppHandle) -> Result<PathBuf, String> {    let resource_dir = app
         .path()
         .resource_dir()
         .map_err(|e| format!("resource dir unavailable: {e}"))?;

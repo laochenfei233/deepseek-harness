@@ -153,6 +153,7 @@ impl DshHandle {
             path_parts.push(existing);
         }
         cmd.env("PATH", path_parts.join(";"));
+        no_window(&mut cmd);
         // Diagnostics: record exactly what is about to be spawned.
         if let Ok(log_dir) = app.path().app_log_dir() {
             let _ = std::fs::create_dir_all(&log_dir);
@@ -249,7 +250,11 @@ impl DshHandle {
         #[cfg(windows)]
         {
             // Directory junction (no admin rights needed, unlike symlink).
-            let status = std::process::Command::new("cmd")
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            let mut mklink = std::process::Command::new("cmd");
+            mklink.creation_flags(CREATE_NO_WINDOW);
+            let status = mklink
                 .args(["/c", "mklink", "/J"])
                 .arg(&link)
                 .arg(&target)
@@ -370,6 +375,17 @@ pub(crate) fn resolve_runtime(app: &AppHandle) -> Result<(PathBuf, PathBuf), Str
         ));
     }
     Ok((plain_path(&PathBuf::from(node)), plain_path(&PathBuf::from(dsh_bin))))
+}
+
+/// The app is a GUI process (windows_subsystem = windows); spawned children
+/// otherwise create a visible console window. Suppress it.
+fn no_window(cmd: &mut tokio::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
 }
 
 /// Windows verbatim paths (`\\?\C:\...`, produced by canonicalization inside
