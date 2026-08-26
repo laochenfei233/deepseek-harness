@@ -199,6 +199,35 @@ async function deployDsh() {
   flattenClosure();
   patchBrokenLinks(repo);
   patchMissingPeers(repo);
+  if (PLATFORM === 'linux') pruneForeignLinuxPlatformPackages();
+}
+
+// pnpm deploys every platform's optional native binary, so the Linux closure
+// carries musl and foreign-arch ELFs alongside the glibc x64 ones. AppImage
+// bundling then fails: linuxdeploy deploys the dependencies of every ELF it
+// finds, and a musl build's libc.musl has no glibc counterpart. Keep only the
+// variants the app loads on this platform.
+function pruneForeignLinuxPlatformPackages() {
+  const topNm = join(DSH_DIR, 'node_modules');
+  const foreign = (name) =>
+    /(win32|darwin|freebsd|android)/i.test(name) ||
+    /musl/i.test(name) ||
+    /-linux-(?!x64\b)/i.test(name);
+  const candidates = [];
+  for (const entry of readdirSync(topNm, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name.startsWith('@')) {
+      const scope = join(topNm, entry.name);
+      for (const sub of readdirSync(scope, { withFileTypes: true })) {
+        if (sub.isDirectory()) candidates.push(join(scope, sub.name));
+      }
+    } else {
+      candidates.push(join(topNm, entry.name));
+    }
+  }
+  const hits = candidates.filter((dir) => foreign(dir.split(/[\\/]/).pop()));
+  for (const dir of hits) rmSync(dir, { recursive: true, force: true });
+  step(`pruned ${hits.length} foreign-platform package(s) from dsh closure`);
 }
 
 // pnpm deploy (legacy) does not install peer-only packages: rows that only
