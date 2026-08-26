@@ -15,9 +15,9 @@
 // runner platform so each matrix job bundles its own runtime.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, cpSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, cpSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createWriteStream } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync, statSync, realpathSync } from 'node:fs';
 
@@ -29,9 +29,13 @@ const PLUGINS_DIR = join(RUNTIME, 'plugins');
 
 const args = process.argv.slice(2);
 const platformArg = args.find((a) => a.startsWith('--platform='))?.split('=')[1];
+const archArg = args.find((a) => a.startsWith('--arch='))?.split('=')[1];
 const nodeArg = args.find((a) => a.startsWith('--node-version='))?.split('=')[1];
 
 const PLATFORM = platformArg ?? hostPlatform();
+// macOS ships both arm64 and Intel; CI builds one runtime per arch. Other
+// platforms are x64 only.
+const ARCH = archArg ?? (PLATFORM === 'mac' ? 'arm64' : 'x64');
 const DSH = '@deepseek-ai/dsh';
 
 function hostPlatform() {
@@ -43,11 +47,21 @@ function hostPlatform() {
 // execFileSync on Windows cannot resolve `.cmd` shims (corepack's pnpm)
 // without shell interpretation; route through cmd.exe there.
 function runPnpm(args, opts) {
+  const env = pnpmEnv();
   if (process.platform === 'win32') {
-    execFileSync('cmd.exe', ['/c', 'pnpm', ...args], { ...opts, stdio: 'inherit' });
+    execFileSync('cmd.exe', ['/c', 'pnpm', ...args], { ...opts, stdio: 'inherit', env });
   } else {
-    execFileSync('pnpm', args, { ...opts, stdio: 'inherit' });
+    execFileSync('pnpm', args, { ...opts, stdio: 'inherit', env });
   }
+}
+
+// A cross-arch macOS bundle (x64 on an arm64 runner) must resolve native
+// dependencies for the target arch: pnpm picks packages and prebuilds by the
+// node it runs under, so PATH points at the bundled x64 node first.
+function pnpmEnv() {
+  if (PLATFORM !== 'mac' || ARCH !== 'x64') return process.env;
+  const binDir = join(NODE_DIR, 'bin');
+  return { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}` };
 }
 
 function step(msg) {
@@ -111,7 +125,7 @@ function findNodeDir(dir) {
 }
 
 async function installNode() {
-  const arch = PLATFORM === 'mac' ? 'arm64' : 'x64';
+  const arch = ARCH;
   const version = nodeArg ?? (await latestLtsV22());
   const os = PLATFORM === 'win' ? 'win' : PLATFORM === 'mac' ? 'darwin' : 'linux';
   const archiveInfo = nodeArchive(version, os, arch);
@@ -136,6 +150,11 @@ async function installNode() {
     rmSync(join(NODE_DIR, 'lib'), { recursive: true, force: true });
     rmSync(join(NODE_DIR, 'include'), { recursive: true, force: true });
     rmSync(join(NODE_DIR, 'share'), { recursive: true, force: true });
+    // Re-create the bin/ shim directory the flatten removed: cross-arch
+    // macOS pnpm operations must run under this bundled node so native
+    // dependencies resolve for the target arch (see pnpmEnv).
+    mkdirSync(join(NODE_DIR, 'bin'), { recursive: true });
+    symlinkSync(join(NODE_DIR, 'node'), join(NODE_DIR, 'bin', 'node'));
   }
   rmSync(tmp, { recursive: true, force: true });
   step(`node ${version} installed`);
