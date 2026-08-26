@@ -18,6 +18,7 @@ const PLUGINS = [
   { id: 'dsh-qqbot', spec: 'dsh-qqbot', name: 'QQ 机器人', desc: 'QQ Bot 接入 DeepSeek Harness（腾讯官方插件）' },
   { id: 'dsh-vision-router', spec: 'dsh-vision-router', name: '视觉路由', desc: '内置免费视觉链 + 像素级视觉工具（图像问答/OCR/截图等），无需 Python' },
   { id: 'graph-memory', spec: 'github:adoresever/graph-memory', name: '知识图谱记忆', desc: '跨会话记忆召回：知识图谱 + 语义向量检索，本地优先存储，压缩上下文' },
+  { id: 'aegis', spec: 'github:ganyuanran/aegis', name: 'Aegis 方法包', desc: 'AI 编码更可靠：基线优先、证据验证、防漂移，减少返工' },
 ];
 
 const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
