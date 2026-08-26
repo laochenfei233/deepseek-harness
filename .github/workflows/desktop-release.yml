@@ -19,6 +19,9 @@ concurrency:
 
 env:
   CARGO_HTTP_CHECK_REVOKE: 'false'
+  # GitHub-hosted ubuntu-latest (24.04) has no FUSE; linuxdeploy and the
+  # appimage plugin must self-extract instead of mounting the AppImage.
+  APPIMAGE_EXTRACT_AND_RUN: '1'
 
 jobs:
   build:
