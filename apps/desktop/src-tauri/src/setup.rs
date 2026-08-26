@@ -212,11 +212,8 @@ pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
         Err(_) => return Ok(()), // dev without bundled plugins: nothing to preinstall
     };
 
-    let defaults: &[(&str, &str)] = &[
-        ("dsh-plugin", "./plugins/dsh-plugin/node_modules/dsh-plugin"),
-        ("dsh-win-terminal-inspector", "./plugins/dsh-win-terminal-inspector/index.js"),
-    ];
-    for (dir_name, patch_name) in defaults {
+    let defaults: &[&str] = &["dsh-plugin", "dsh-win-terminal-inspector"];
+    for dir_name in defaults {
         let src = runtime_plugins.join(dir_name);
         if !src.exists() {
             continue;
