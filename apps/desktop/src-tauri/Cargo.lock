@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "dsh-desktop"
-version = "0.1.0"
+version = "0.1.1-rc.2"
 dependencies = [
  "serde",
  "serde_json",
