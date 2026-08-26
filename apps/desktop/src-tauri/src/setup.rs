@@ -212,13 +212,19 @@ pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
         Err(_) => return Ok(()), // dev without bundled plugins: nothing to preinstall
     };
 
-    let defaults: &[&str] = &["dsh-plugin", "dsh-win-terminal-inspector"];
-    for dir_name in defaults {
-        let src = runtime_plugins.join(dir_name);
-        if !src.exists() {
-            continue;
-        }
-        let dest = profile.join("plugins").join(dir_name);
+    // dsh-plugin is an npm-distributed bundle (dsh.bundle.patch + dsh.client).
+    // Copy it into the launcher-maintained flat module fallback so the bare
+    // name resolves from the profile ("bundles come from the installation"),
+    // and insert it under that name: the client module registry resolves the
+    // entry name to serve the plugin-center tab. A path-based row loads the
+    // server half but leaves the entry unresolvable by the registry.
+    ensure_market_bundle(&home, &runtime_plugins)?;
+
+    // dsh-win-terminal-inspector has no npm distribution; it ships as a local
+    // copy inside the profile's plugins directory.
+    let src = runtime_plugins.join("dsh-win-terminal-inspector");
+    if src.exists() {
+        let dest = profile.join("plugins").join("dsh-win-terminal-inspector");
         if !dest.exists() {
             fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
             copy_dir(&src, &dest)?;
@@ -231,11 +237,8 @@ pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
         .and_then(|raw| serde_yaml::from_str(&raw).ok())
         .map(sanitize_rows)
         .unwrap_or_default();
-    if !has_patch_row(&rows, "dsh-plugin") {
-        rows.push(serde_yaml::from_str(
-            "insert:\n  - id: dsh-plugin\n    name: ./plugins/dsh-plugin/node_modules/dsh-plugin/lib/index.js\n",
-        ).map_err(|e| format!("build patch row: {e}"))?);
-    }
+    upsert_patch_row(&mut rows, "dsh-plugin",
+        "insert:\n  - id: dsh-plugin\n    name: dsh-plugin\n")?;
     if !has_patch_row(&rows, "win-terminal-inspector") {
         rows.push(serde_yaml::from_str(
             "insert:\n  - id: win-terminal-inspector\n    name: ./plugins/dsh-win-terminal-inspector/index.js\n",
@@ -243,6 +246,39 @@ pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
     }
     fs::write(&patch_path, serde_yaml::to_string(&rows).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Copy the bundled dsh-plugin package into the profile module fallback
+/// (`$DSH_HOME/profiles/node_modules`) so bare `dsh-plugin` resolves from the
+/// profile through the ordinary parent-walk, exactly like an in-box bundle.
+fn ensure_market_bundle(home: &Path, runtime_plugins: &Path) -> Result<(), String> {
+    let src = runtime_plugins.join("dsh-plugin").join("node_modules").join("dsh-plugin");
+    if !src.exists() {
+        return Ok(());
+    }
+    let dest = home.join("profiles").join("node_modules").join("dsh-plugin");
+    if dest.exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
+    copy_dir(&src, &dest)
+}
+
+/// Insert a patch row unless a row with the same id exists, replacing it when
+/// it does — the dsh-plugin row used to carry a path-based name and must
+/// migrate to the bare package name.
+fn upsert_patch_row(rows: &mut Vec<Yaml>, id: &str, row_yaml: &str) -> Result<(), String> {
+    let row: Yaml = serde_yaml::from_str(row_yaml).map_err(|e| format!("build patch row: {e}"))?;
+    let position = rows.iter().position(|row| {
+        row.get("insert")
+            .and_then(|ins| ins.as_sequence())
+            .is_some_and(|seq| seq.iter().any(|e| e.get("id").and_then(Yaml::as_str) == Some(id)))
+    });
+    match position {
+        Some(index) => rows[index] = row,
+        None => rows.push(row),
+    }
     Ok(())
 }
 

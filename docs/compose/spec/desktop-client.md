@@ -132,7 +132,7 @@ apps/desktop/
 
 ### 2.9 插件中心预装与内容链接外开
 
-- **插件中心预装**：`dsh-plugin`（npm 包，对应 dshplugin/dsh-plugin-hub）由 `scripts/bundle-runtime.mjs` 在打包期以 `dsh-plugin@latest` 装进 `runtime/plugins/dsh-plugin`（`--prod --ignore-scripts`，flatten 闭包），首启时由 `setup.rs` 复制进 web profile 的 `plugins/` 并写入 `cordis.patch.yml` insert 行（`id: dsh-plugin`，name 指向 `./plugins/dsh-plugin/node_modules/dsh-plugin/lib/index.js`）。
+- **插件中心预装**：`dsh-plugin`（npm 包，对应 dshplugin/dsh-plugin-hub）由 `scripts/bundle-runtime.mjs` 在打包期以 `dsh-plugin@latest` 装进 `runtime/plugins/dsh-plugin`（`--prod --ignore-scripts`，flatten 闭包），首启时由 `setup.rs` 复制进 `$DSH_HOME/profiles/node_modules/dsh-plugin`（launcher 维护的扁平模块回退目录，裸包名 `dsh-plugin` 从 profile 经父目录上溯即可解析），并在 `cordis.patch.yml` 写 `insert` 行（`id: dsh-plugin`，name 为裸包名 `dsh-plugin`）——客户端模块注册表按条目名解析该包以提供「设置 → 插件中心」标签；旧实现的路径式 name（`./plugins/.../lib/index.js`）能加载服务端但客户端注册表解析不到，已在 `upsert_patch_row` 中迁移。
 - **内容链接外开**：主窗口由 `lib.rs::build_main_window` 经 `WebviewWindowBuilder` 构建（`tauri.conf.json` 中 `create: false`），并挂 `on_new_window` 处理器：http/https/mailto/tel 通过 `tauri-plugin-opener` 交给系统默认浏览器打开，其余 scheme 一律拒绝；弹窗请求本身全部 `Deny`，应用内不产生新窗口。壳页面、向导页与 dsh iframe 内的 `target="_blank"` / `window.open` 均走此路径。
 
 ## [S3] Out of Scope
