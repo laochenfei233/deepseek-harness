@@ -42,8 +42,11 @@ pub struct FirstRunState {
 }
 
 fn read_state(home: &Path) -> (bool, String) {
-    let initialized = profile_web_dir(home).join("cordis.patch.yml").exists()
-        || profile_web_dir(home).join("package.json").exists();
+    // The shell's own marker (written when the first-run wizard completes)
+    // decides initialization. The profile patch and package.json are seeded
+    // by ensure_default_plugins and the dsh process before the wizard runs,
+    // so their existence must not suppress the wizard.
+    let initialized = state_path(home).exists();
     let preset = fs::read_to_string(state_path(home))
         .ok()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())

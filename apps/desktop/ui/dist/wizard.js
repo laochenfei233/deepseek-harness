@@ -90,6 +90,9 @@ document.getElementById('btn-finish').addEventListener('click', async () => {
       await invoke('install_plugin', { spec: plugin.spec });
     }
     showProgress('完成', 1);
+    // Newly installed plugin bundles load when the dsh service restarts;
+    // the shell reconnects and lands on the main UI.
+    await invoke('restart_dsh').catch(() => {});
     setTimeout(() => {
       window.location.href = 'index.html';
     }, 400);
