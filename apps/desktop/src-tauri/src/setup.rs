@@ -244,10 +244,32 @@ pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
             "insert:\n  - id: win-terminal-inspector\n    name: ./plugins/dsh-win-terminal-inspector/index.js\n",
         ).map_err(|e| format!("build patch row: {e}"))?);
     }
-    fs::write(&patch_path, serde_yaml::to_string(&rows).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    // MCP servers are per-instance config rows on the built-in mcp-client
+    // bridge (already shipped in the runtime closure); a commented template
+    // in the user patch layer makes local MCP support discoverable.
+    let mut patch_text = serde_yaml::to_string(&rows).map_err(|e| e.to_string())?;
+    if !patch_text.contains("dsh-mcp-client") {
+        patch_text.push_str(MCP_TEMPLATE);
+    }
+    fs::write(&patch_path, patch_text).map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// Commented mcp-client template appended to the profile patch layer. MCP
+/// servers are one config row per server (serverName/transport/command/args);
+/// uncommenting and editing enables a server, hot-reloaded by the loader.
+const MCP_TEMPLATE: &str = r#"
+# MCP 服务器接入：内置 dsh-mcp-client，工具名形如 mcp__<server>__<tool>。
+# 取消注释并填入你的服务器即启用（自动热重载）：
+# - insert:
+#     - id: mcp-my-server
+#       name: '@deepseek-ai/dsh-mcp-client'
+#       config:
+#         serverName: my-server
+#         transport: stdio
+#         command: npx
+#         args: ['-y', '@modelcontextprotocol/server-filesystem', '/path/to/dir']
+"#;
 
 /// Copy the bundled dsh-plugin package into the profile module fallback
 /// (`$DSH_HOME/profiles/node_modules`) so bare `dsh-plugin` resolves from the
