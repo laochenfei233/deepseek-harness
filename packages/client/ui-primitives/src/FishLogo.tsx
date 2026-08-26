@@ -2,6 +2,8 @@
 // the full-canvas rectangle path from the raw dump is a background plate and
 // is intentionally dropped). Native 23.16x17.04, rendered 24x18 by default;
 // hero usage scales to 34x25. Color rides currentColor (wordmark ink).
+// The viewBox adds ~7% padding on every side so the fish does not touch the
+// container edge when the mark sits on a tinted background plate.
 
 import type { IconProps } from './icons/props.ts'
 
@@ -15,9 +17,9 @@ export function FishLogo({ size = 24, className }: IconProps) {
   return (
     <svg
       width={size}
-      height={(size * 17.04) / 23.16}
+      height={(size * 19.44) / 26.36}
       className={className}
-      viewBox="0 0 23.16 17.04"
+      viewBox="-1.6 -1.2 26.36 19.44"
       fill="none"
       aria-hidden="true"
     >
