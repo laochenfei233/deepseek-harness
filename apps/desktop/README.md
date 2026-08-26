@@ -6,7 +6,7 @@ Tauri 2 桌面壳：在原生窗口里内嵌 dsh web UI，内置 Node 运行时�
 
 ```
 src-tauri/            Rust 壳
-  src/dsh_runner.rs   dsh 子进程生命周期：spawn `dsh web --port 3081 --no-open`、端口健康探测、崩溃自动重启（dsh-market 自行重启时不竞争）
+  src/dsh_runner.rs   dsh 子进程生命周期：spawn `dsh web --port 3081 --no-open`、端口健康探测、崩溃自动重启（dsh-plugin 自行重启时不竞争）
   src/tray.rs         托盘常驻：关窗隐藏，托盘「退出」才结束进程树
   src/setup.rs        首次启动向导命令：预设写入 profile patch（agent-presets.config.default）、插件安装（dsh plugin / 本地复制）
 ui/dist/              壳前端（纯静态，无构建）：index.html 导航栏 + iframe；wizard.html 首次向导
@@ -42,7 +42,7 @@ CI（`.github/workflows/desktop-release.yml`）在三平台矩阵上执行同一
 ## 首次启动
 
 - 默认预设：`standard`（可改 `code` / `minimal` / `cordis`，写入 `~/.dsh/profiles/web/cordis.patch.yml` 的 `agent-presets.config.default`）
-- 默认插件：`dshmarket`（插件市场）、`dsh-win-terminal-inspector`（仅 Windows，本地复制 + patch insert）
+- 默认插件：`dsh-plugin`（插件中心/市场）、`dsh-win-terminal-inspector`（仅 Windows，本地复制 + patch insert）
 - 可选插件：`dsh-better-sidebar`、`dsh-tauri`（导航桥）、`dsh-notification`、`dsh-session-context-menu`、`@xmanrui/dsh-im`（企微/飞书/钉钉/微信/QQ 等 9 渠道）、`dsh-lark`、`dsh-qqbot`
 
-插件安装/更新/卸载全部走 dsh 官方机制（`dsh plugin` / dsh-market），运行时内置 pnpm 与其同版本族。
+插件安装/更新/卸载全部走 dsh 官方机制（`dsh plugin` / dsh-plugin 插件中心），运行时内置 pnpm 与其同版本族。

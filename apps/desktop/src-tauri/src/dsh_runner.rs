@@ -50,7 +50,7 @@ impl DshHandle {
 
     /// Supervision loop: spawn, wait for ready or exit, then restart on
     /// unexpected exit (unless another process already took the port, which
-    /// happens when dsh-market restarts the server itself).
+    /// happens when the dsh-plugin market restarts the server itself).
     async fn supervise(&self, app: AppHandle) {
         let mut restarts = 0u32;
         loop {
@@ -107,7 +107,7 @@ impl DshHandle {
                 return;
             }
 
-            // dsh-market may restart the server itself; in that case the port
+            // the dsh-plugin market may restart the server itself; in that case the port
             // stays occupied and we must not spawn a rival.
             if port_open(INTERNAL_PORT) {
                 let _ = app.emit("dsh://restarted-by-plugin", ());

@@ -492,34 +492,38 @@ async function main() {
   }
   await deployDsh();
   await installWinTerminalInspector();
-  await prepareDefaultPluginDshmarket();
+  await prepareDefaultPluginDshPlugin();
   writeManifest();
 }
 
 // The plugin market ships preinstalled: install its full dependency closure
-// into runtime/plugins/dshmarket (network at bundle time, offline afterwards).
-// The shell copies this directory into the web profile on first launch.
-async function prepareDefaultPluginDshmarket() {
-  const dest = join(PLUGINS_DIR, 'dshmarket');
+// into runtime/plugins/dsh-plugin (network at bundle time, offline
+// afterwards). The shell copies this directory into the web profile on first
+// launch.
+async function prepareDefaultPluginDshPlugin() {
+  const dest = join(PLUGINS_DIR, 'dsh-plugin');
   rmSync(dest, { recursive: true, force: true });
   mkdirSync(dest, { recursive: true });
   writeFileSync(
     join(dest, 'package.json'),
-    JSON.stringify({ name: 'dshmarket-bundle', private: true, type: 'module', dependencies: { dshmarket: 'latest' } }, null, 2),
+    JSON.stringify({ name: 'dsh-plugin-bundle', private: true, type: 'module', dependencies: { 'dsh-plugin': 'latest' } }, null, 2),
   );
   // Isolate from the parent workspace so pnpm treats this as a standalone
-  // project (no purge/TTY prompts, no lefthook postinstall).
-  writeFileSync(join(dest, 'pnpm-workspace.yaml'), 'packages: []\n');
-  step('install dshmarket closure into runtime/plugins/dshmarket');
+  // project (no purge/TTY prompts, no lefthook postinstall). minimumReleaseAge
+  // defaults on in pnpm 11 and would make `latest` skip a fresh market
+  // release, silently resolving to an older version; zero it so the market
+  // plugin tracks the newest published build.
+  writeFileSync(join(dest, 'pnpm-workspace.yaml'), 'packages: []\nminimumReleaseAge: 0\n');
+  step('install dsh-plugin closure into runtime/plugins/dsh-plugin');
   runPnpm(['install', '--prod', '--ignore-scripts', '--lockfile=false'], { cwd: dest });
-  const marketPkg = join(dest, 'node_modules', 'dshmarket', 'package.json');
+  const marketPkg = join(dest, 'node_modules', 'dsh-plugin', 'package.json');
   if (!existsSync(marketPkg)) {
-    throw new Error('dshmarket did not install into runtime/plugins/dshmarket');
+    throw new Error('dsh-plugin did not install into runtime/plugins/dsh-plugin');
   }
   // Flatten the closure so a copied profile plugin resolves its own deps.
   flattenNodeModules(join(dest, 'node_modules'));
   rmSync(join(dest, 'node_modules', '.pnpm'), { recursive: true, force: true });
-  step('dshmarket closure installed');
+  step('dsh-plugin closure installed');
 }
 
 main().catch((err) => {

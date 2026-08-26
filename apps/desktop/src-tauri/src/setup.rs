@@ -213,7 +213,7 @@ pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
     };
 
     let defaults: &[(&str, &str)] = &[
-        ("dshmarket", "./plugins/dshmarket/node_modules/dshmarket"),
+        ("dsh-plugin", "./plugins/dsh-plugin/node_modules/dsh-plugin"),
         ("dsh-win-terminal-inspector", "./plugins/dsh-win-terminal-inspector/index.js"),
     ];
     for (dir_name, patch_name) in defaults {
@@ -234,9 +234,9 @@ pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
         .and_then(|raw| serde_yaml::from_str(&raw).ok())
         .map(sanitize_rows)
         .unwrap_or_default();
-    if !has_patch_row(&rows, "dshmarket") {
+    if !has_patch_row(&rows, "dsh-plugin") {
         rows.push(serde_yaml::from_str(
-            "insert:\n  - id: dshmarket\n    name: ./plugins/dshmarket/node_modules/dshmarket/lib/index.js\n",
+            "insert:\n  - id: dsh-plugin\n    name: ./plugins/dsh-plugin/node_modules/dsh-plugin/lib/index.js\n",
         ).map_err(|e| format!("build patch row: {e}"))?);
     }
     if !has_patch_row(&rows, "win-terminal-inspector") {
