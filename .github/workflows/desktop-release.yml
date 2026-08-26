@@ -96,6 +96,7 @@ jobs:
             首次启动向导默认安装插件中心与 Windows 终端检测，可选 IM 频道（企微/飞书/钉钉/微信/QQ）等插件。
           releaseDraft: true
           prerelease: false
+          args: --verbose
 
       - name: Restore workspace declarations
         if: always()
