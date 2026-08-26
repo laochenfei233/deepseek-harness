@@ -15,7 +15,7 @@
 // runner platform so each matrix job bundles its own runtime.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, cpSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, cpSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createWriteStream } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -125,6 +125,18 @@ async function installNode() {
   // Copy the whole distribution (node binary + bundled npm) so the shell can
   // install plugins without an external toolchain.
   cpSync(findNodeDir(tmp), NODE_DIR, { recursive: true });
+  // POSIX tarballs lay the binary under bin/ and bundled npm under
+  // lib/node_modules/npm; flatten both to the layout the Windows zip ships,
+  // which the rest of this script and the Rust shell resolve against.
+  if (PLATFORM !== 'win') {
+    renameSync(join(NODE_DIR, 'bin', 'node'), join(NODE_DIR, 'node'));
+    rmSync(join(NODE_DIR, 'bin'), { recursive: true, force: true });
+    mkdirSync(join(NODE_DIR, 'node_modules'), { recursive: true });
+    renameSync(join(NODE_DIR, 'lib', 'node_modules', 'npm'), join(NODE_DIR, 'node_modules', 'npm'));
+    rmSync(join(NODE_DIR, 'lib'), { recursive: true, force: true });
+    rmSync(join(NODE_DIR, 'include'), { recursive: true, force: true });
+    rmSync(join(NODE_DIR, 'share'), { recursive: true, force: true });
+  }
   rmSync(tmp, { recursive: true, force: true });
   step(`node ${version} installed`);
 }
