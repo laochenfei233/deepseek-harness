@@ -227,7 +227,25 @@ function pruneForeignLinuxPlatformPackages() {
   }
   const hits = candidates.filter((dir) => foreign(dir.split(/[\\/]/).pop()));
   for (const dir of hits) rmSync(dir, { recursive: true, force: true });
-  step(`pruned ${hits.length} foreign-platform package(s) from dsh closure`);
+
+  // Native packages also embed foreign variants as subdirectories (koffi
+  // ships musl_x64/ next to linux_x64/); linuxdeploy scans those ELFs the
+  // same way, so drop every musl-named directory in the closure.
+  let subHits = 0;
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const full = join(dir, entry.name);
+      if (/musl/i.test(entry.name)) {
+        rmSync(full, { recursive: true, force: true });
+        subHits += 1;
+      } else {
+        walk(full);
+      }
+    }
+  };
+  walk(topNm);
+  step(`pruned ${hits.length + subHits} foreign/musl path(s) from dsh closure`);
 }
 
 // pnpm deploy (legacy) does not install peer-only packages: rows that only
