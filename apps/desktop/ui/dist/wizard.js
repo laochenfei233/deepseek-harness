@@ -9,7 +9,6 @@ const PRESETS = [
 ];
 
 const PLUGINS = [
-  { id: 'dsh-tauri', spec: 'dsh-tauri', name: '桌面导航桥', desc: '让顶部导航栏（侧边栏/后退/前进）控制 dsh 界面' },
   { id: 'dsh-better-sidebar', spec: 'dsh-better-sidebar@latest', name: '增强侧边栏', desc: '文件工作台、真实终端、Git 面板、内嵌浏览器与子代理面板' },
   { id: 'dsh-notification', spec: 'https://github.com/omdsh-dev/dsh-notification/archive/refs/tags/v0.1.3.tar.gz', name: '桌面通知', desc: '回合完成时发送系统通知，可按结果与关键词过滤' },
   { id: 'dsh-session-context-menu', spec: 'github:baihejiangnan/dsh-session-context-menu', name: '更好的右键菜单', desc: '会话/工作区/文本的原生风格右键菜单（桌面端专用）' },

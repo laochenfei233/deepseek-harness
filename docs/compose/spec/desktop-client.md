@@ -10,7 +10,7 @@ commits: 57da7798a..9176ccb11
 
 ## Report
 
-**What was built** — 桌面端内置插件市场由 `dshmarket` 切换为 `dsh-plugin`（npm 包，对应 dshplugin/dsh-plugin-hub 插件中心）：`scripts/bundle-runtime.mjs` 在打包期把 `dsh-plugin@latest` 装进 `runtime/plugins/dsh-plugin`（`--prod --ignore-scripts`，flatten 闭包，pnpm-workspace.yaml 置 `minimumReleaseAge: 0` 保证跟踪最新发行），首启时 `setup.rs::ensure_default_plugins` 复制进 web profile 的 `plugins/` 并写入 `cordis.patch.yml` insert 行（`id: dsh-plugin`，name `./plugins/dsh-plugin/node_modules/dsh-plugin/lib/index.js`，与包 `main` 一致）。内容链接改为系统默认浏览器打开：主窗口改由 `WebviewWindowBuilder` 构建（`tauri.conf.json` `create: false`）并挂 `on_new_window`，http/https/mailto/tel 经 `tauri-plugin-opener` 外开、其余 scheme 拒绝、弹窗一律 `Deny`，壳页面、向导页与 dsh iframe 内的 `target="_blank"` / `window.open` 均不再在应用内开新窗口。首启向导可选插件默认全部不勾选（移除 `dsh-tauri` 桌面导航桥条目的 `defaultOn: true`），导航桥等可选插件改为按需勾选安装。
+**What was built** — 桌面端内置插件市场由 `dshmarket` 切换为 `dsh-plugin`（npm 包，对应 dshplugin/dsh-plugin-hub 插件中心）：`scripts/bundle-runtime.mjs` 在打包期把 `dsh-plugin@latest` 装进 `runtime/plugins/dsh-plugin`（`--prod --ignore-scripts`，flatten 闭包，pnpm-workspace.yaml 置 `minimumReleaseAge: 0` 保证跟踪最新发行），首启时 `setup.rs::ensure_default_plugins` 复制进 web profile 的 `plugins/` 并写入 `cordis.patch.yml` insert 行（`id: dsh-plugin`，name `./plugins/dsh-plugin/node_modules/dsh-plugin/lib/index.js`，与包 `main` 一致）。内容链接改为系统默认浏览器打开：主窗口改由 `WebviewWindowBuilder` 构建（`tauri.conf.json` `create: false`）并挂 `on_new_window`，http/https/mailto/tel 经 `tauri-plugin-opener` 外开、其余 scheme 拒绝、弹窗一律 `Deny`，壳页面、向导页与 dsh iframe 内的 `target="_blank"` / `window.open` 均不再在应用内开新窗口。首启向导可选插件默认全部不勾选；顶部导航栏已移除（dsh UI 自带导航），`dsh-tauri` 导航桥条目随之从向导删除。
 
 **Verification** — `cargo check`（apps/desktop/src-tauri）：PASS，仅 1 个存量 warning（dsh_runner.rs:385 unused import）。`node --check` scripts/bundle-runtime.mjs、ui/dist/wizard.js、ui/dist/app.js：PASS。npm 烟测：`pnpm install --prod --ignore-scripts --lockfile=false` + `minimumReleaseAge: 0` 安装 `dsh-plugin@1.3.5`，`node_modules/dsh-plugin/lib/index.js` 存在且可加载；npm 元数据确认 `main=lib/index.js`、repository=dshplugin/dsh-plugin-hub、无运行时依赖。独立评审对照 wry 0.55.1 源码确认 `on_new_window` 拦截跨源 iframe（127.0.0.1:3081）的 NewWindowRequested，`Deny` → 不产生窗口。未做：bundle-runtime.mjs 全量执行（需先 `pnpm run build` 并下载 Node 运行时，由 CI 的 desktop-release.yml 覆盖）；应用内点击的端到端手测（Windows GUI，本环境无法无头执行）。
 
@@ -41,7 +41,7 @@ apps/desktop/
     tauri.conf.json
     capabilities/
     icons/
-  ui/                   # 壳前端：顶部导航栏（侧边栏/后退/前进）+ 首次启动向导页面
+  ui/                   # 壳前端：全窗口 dsh iframe + 首次启动向导页面（无顶部导航栏）
   scripts/
     bundle-runtime.mjs  # 构建「Node runtime + 裁剪 dsh 运行环境」→ resources/
     install-plugins.mjs # 向导选择的插件安装命令封装（dsh plugin add）
@@ -54,14 +54,9 @@ apps/desktop/
 3. 窗口关闭 → 隐藏到托盘，dsh 子进程继续运行；托盘「退出」才真正结束进程树；
 4. dsh 子进程意外退出 → 自动重启一次并回连，仍失败则托盘气泡提示原因。
 
-### 2.2 导航桥（对齐 dsh-tauri 插件协议）
+### 2.2 壳前端与宿主桥
 
-壳内 iframe/WebView 与 dsh UI 之间走 `postMessage`，协议与 `dsh-tauri-desk/dsh-tauri` README 一致（插件与壳共用同一协议，插件加载后设置 `window.__dsh_tauri_bridge__` 让位）：
-
-- 宿主 → iframe（`source: 'dsh-desktop'`）：`dsh://sidebar:toggle`、`dsh://page:prev`、`dsh://page:next`
-- iframe → 宿主（`source: 'dsh-nav-bridge'`）：`dsh://sidebar:collapsed`、`dsh://page:firsted`、`dsh://page:lasted`
-
-顶部导航栏三控件（侧边栏/后退/前进）由壳渲染，常驻于 dsh 应用之上。
+壳不渲染顶部导航栏：窗口内容即 dsh UI 本身（全窗口 iframe），导航/侧边栏全部由 dsh UI 自己提供。壳与 iframe 之间只走宿主桥（`source: 'dsh-desktop-host'`）：通知经 `tauri-plugin-notification` 弹原生 toast，外链经 `tauri-plugin-opener` 交默认浏览器，均由 bundle 期注入的桥脚本转发。错误横幅（服务失败 + 重启按钮）是唯一的壳级 UI 兜底。
 
 ### 2.3 宿主 RPC
 
@@ -87,10 +82,10 @@ apps/desktop/
 2. **默认插件（自动安装，不可取消）**：`dsh-plugin`（dshplugin/dsh-plugin-hub 插件中心）、`dsh-win-terminal-inspector`（仅 Windows）；
 3. **可选插件（勾选安装，全部默认不勾选）**：
    - `dsh-better-sidebar`（omdsh-dev/DSH-better-sidebar）
-   - `dsh-tauri`（dsh-tauri-desk/dsh-tauri，桌面导航桥）
    - `dsh-notification`（omdsh-dev/dsh-notification）
    - `dsh-session-context-menu`（baihejiangnan/dsh-session-context-menu，仅封装端适用）
    - **IM 频道插件**：`@xmanrui/dsh-im`（企微/飞书/钉钉/微信/QQ 九渠道一站式）、`dsh-lark`（飞书）、`dsh-qqbot`（QQ）
+   - `dsh-vision-router`（视觉路由）、`graph-memory`（知识图谱记忆）、`aegis`（Aegis 方法包）
 4. 向导将选择写成 profile 的 `cordis.patch.yml` / 执行 `dsh plugin --profile web add ...`（内部调用内置 pnpm），完成后进入主界面。
 
 插件安装命令（verbatim，来自插件仓库 README）：

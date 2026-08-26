@@ -9,12 +9,12 @@ src-tauri/            Rust 壳
   src/dsh_runner.rs   dsh 子进程生命周期：spawn `dsh web --port 3081 --no-open`、端口健康探测、崩溃自动重启（dsh-plugin 自行重启时不竞争）
   src/tray.rs         托盘常驻：关窗隐藏，托盘「退出」才结束进程树
   src/setup.rs        首次启动向导命令：预设写入 profile patch（agent-presets.config.default）、插件安装（dsh plugin / 本地复制）
-ui/dist/              壳前端（纯静态，无构建）：index.html 导航栏 + iframe；wizard.html 首次向导
+ui/dist/              壳前端（纯静态，无构建）：index.html 全窗口 iframe + 错误横幅；wizard.html 首次向导
 scripts/bundle-runtime.mjs  打包 Node 运行时 + pnpm deploy 的 dsh 闭包 + 本地插件 → runtime/
 runtime/              打包产物（不入库，CI 生成；tauri.conf.json 将其映射为 bundle resources）
 ```
 
-端口约定：壳内 `dsh web` 固定监听 `127.0.0.1:3081`，WebView 同源直连（CLI 用户的 `dsh web` 默认 3080 不受影响）。`/api`（含 `host.openPath`、WebSocket 下行、SSE）全部由 dsh 自身提供，壳不做反向代理。导航栏与 dsh UI 之间走 `dsh-tauri` 插件定义的 postMessage 协议（`dsh://sidebar:toggle` 等，`source: 'dsh-desktop'` / `'dsh-nav-bridge'`）。
+端口约定：壳内 `dsh web` 固定监听 `127.0.0.1:3081`，WebView 同源直连（CLI 用户的 `dsh web` 默认 3080 不受影响）。`/api`（含 `host.openPath`、WebSocket 下行、SSE）全部由 dsh 自身提供，壳不做反向代理。壳不渲染顶部导航栏，界面完全由 dsh UI 自身提供；壳与 iframe 之间只走宿主桥（`source: 'dsh-desktop-host'` 的通知与外部链接消息）。
 
 ## 开发
 
@@ -43,6 +43,6 @@ CI（`.github/workflows/desktop-release.yml`）在三平台矩阵上执行同一
 
 - 默认预设：`standard`（可改 `code` / `minimal` / `cordis`，写入 `~/.dsh/profiles/web/cordis.patch.yml` 的 `agent-presets.config.default`）
 - 默认插件：`dsh-plugin`（插件中心/市场）、`dsh-win-terminal-inspector`（仅 Windows，本地复制 + patch insert）
-- 可选插件：`dsh-better-sidebar`、`dsh-tauri`（导航桥）、`dsh-notification`、`dsh-session-context-menu`、`@xmanrui/dsh-im`（企微/飞书/钉钉/微信/QQ 等 9 渠道）、`dsh-lark`、`dsh-qqbot`
+- 可选插件：`dsh-better-sidebar`、`dsh-notification`、`dsh-session-context-menu`、`@xmanrui/dsh-im`（企微/飞书/钉钉/微信/QQ 等 9 渠道）、`dsh-lark`、`dsh-qqbot`、`dsh-vision-router`、`graph-memory`、`aegis`
 
 插件安装/更新/卸载全部走 dsh 官方机制（`dsh plugin` / dsh-plugin 插件中心），运行时内置 pnpm 与其同版本族。
