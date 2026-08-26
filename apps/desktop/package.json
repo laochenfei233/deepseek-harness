@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-desktop",
   "description": "Desktop shell for DeepSeek Harness: Tauri 2 window + bundled Node runtime + first-run wizard. Never touches upstream packages.",
-  "version": "0.1.0",
+  "version": "0.1.1-rc.2",
   "private": true,
   "type": "module",
   "scripts": {
