@@ -110,7 +110,30 @@ fn log_new_window(app: &tauri::AppHandle, url: &tauri::Url, openable: bool, open
     }
 }
 
+/// The app is a GUI process, so every console child (cmd.exe from pnpm's
+/// .cmd shims, the market's netstat/taskkill probes, git, node-gyp, …) would
+/// otherwise create its own visible console window — Node's windowsHide
+/// defaults to false and CREATE_NO_WINDOW does not propagate. Giving the app
+/// a hidden console makes every descendant attach to it instead.
+#[cfg(windows)]
+fn hide_child_consoles() {
+    unsafe extern "system" {
+        fn AllocConsole() -> i32;
+        fn GetConsoleWindow() -> *mut core::ffi::c_void;
+        fn ShowWindow(hwnd: *mut core::ffi::c_void, n_cmd_show: i32) -> i32;
+    }
+    unsafe {
+        if AllocConsole() != 0 {
+            ShowWindow(GetConsoleWindow(), 0); // SW_HIDE
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn hide_child_consoles() {}
+
 pub fn run() {
+    hide_child_consoles();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
