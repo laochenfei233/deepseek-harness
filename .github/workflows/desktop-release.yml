@@ -33,6 +33,9 @@ jobs:
           - platform: ubuntu-latest
             runtime-platform: linux
     runs-on: ${{ matrix.platform }}
+    permissions:
+      # tauri-action creates the draft Release and uploads installers.
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -87,7 +90,7 @@ jobs:
           releaseName: 'DeepSeek Harness Desktop v__VERSION__'
           releaseBody: |
             Tauri 桌面客户端，内置 Node 运行时与 dsh（四预设 standard / minimal / code / cordis 完整保留）。
-            首次启动向导默认安装插件市场与 Windows 终端检测，可选 IM 频道（企微/飞书/钉钉/微信/QQ）等插件。
+            首次启动向导默认安装插件中心与 Windows 终端检测，可选 IM 频道（企微/飞书/钉钉/微信/QQ）等插件。
           releaseDraft: true
           prerelease: false
 
