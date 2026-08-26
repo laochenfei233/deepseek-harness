@@ -164,7 +164,6 @@ async function deployDsh() {
   mkdirSync(distDest, { recursive: true });
   cpSync(distSrc, distDest, { recursive: true });
   step('web frontend dist copied into deployed closure');
-  injectNotificationBridge(distDest);
 
   // deploy used --ignore-scripts (the repo root postinstall needs lefthook);
   // run the native installs we actually need inside the closure. node-pty's
@@ -201,37 +200,69 @@ async function deployDsh() {
   patchBrokenLinks(repo);
   patchMissingPeers(repo);
   if (PLATFORM === 'linux') pruneForeignLinuxPlatformPackages();
+  // Last: flattenClosure and the patch passes rebuild node_modules from the
+  // store, which would overwrite an earlier dist patch.
+  injectNotificationBridge(distDest);
 }
 
 // WebView2 denies the Web Notification permission in cross-origin iframes
-// (wry answers only the clipboard PermissionRequested), so web notification
-// plugins never fire in the desktop. Patch the served entry document with a
-// bridge that, inside the dsh iframe, replaces `Notification` with a
-// postMessage to the shell — which shows a native OS toast through
-// tauri-plugin-notification. Plain-browser `dsh web` users stay untouched:
-// the bridge activates only when a parent frame exists.
+// (wry answers only the clipboard PermissionRequested) and does not raise
+// NewWindowRequested for target=_blank clicks from one (only the context-menu
+// path does), so web notification plugins never fire and left-clicks on
+// external links die in the desktop. Patch the served entry document with a
+// host bridge that, inside the dsh iframe, routes both to the shell — native
+// toasts through tauri-plugin-notification, and external links through the
+// opener plugin. Plain-browser `dsh web` users stay untouched: the bridge
+// activates only when a parent frame exists.
 function injectNotificationBridge(distDest) {
   const entry = join(distDest, 'index.html');
   if (!existsSync(entry)) return;
   let html = readFileSync(entry, 'utf8');
-  if (html.includes('dsh-desktop-notify')) return;
-  const polyfill = `<script>
+  if (html.includes('dsh-desktop-host')) return;
+  const bridge = `<script>
 (() => {
   if (window === window.parent) return
-  const post = (payload) => window.parent.postMessage({ source: "dsh-desktop-notify", ...payload }, "*")
+  const post = (payload) => window.parent.postMessage({ source: "dsh-desktop-host", ...payload }, "*")
+
   class DshNotification {
     constructor(title, options = {}) {
-      post({ kind: "show", title, body: options.body ?? "", tag: options.tag ?? null, requireInteraction: options.requireInteraction === true })
+      post({ kind: "notify", title, body: options.body ?? "", tag: options.tag ?? null, requireInteraction: options.requireInteraction === true })
     }
     close() {}
     static permission = "granted"
     static requestPermission() { return Promise.resolve("granted") }
   }
   Object.defineProperty(window, "Notification", { configurable: true, value: DshNotification })
+
+  document.addEventListener("click", (event) => {
+    const anchor = event.target.closest?.("a")
+    if (!anchor) return
+    const href = anchor.getAttribute("href")
+    if (!href) return
+    let url
+    try { url = new URL(href, location.href) } catch { return }
+    const external = url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:"
+    if (external && (anchor.target === "_blank" || url.origin !== location.origin)) {
+      event.preventDefault()
+      post({ kind: "open", url: url.href })
+    }
+  }, true)
+
+  const nativeOpen = window.open
+  window.open = (url, ...rest) => {
+    try {
+      const target = new URL(String(url), location.href)
+      if (target.protocol === "http:" || target.protocol === "https:" || target.protocol === "mailto:") {
+        post({ kind: "open", url: target.href })
+        return null
+      }
+    } catch {}
+    return nativeOpen(url, ...rest)
+  }
 })()
 </script>`;
-  writeFileSync(entry, html.replace('</head>', `${polyfill}\n  </head>`));
-  step('notification bridge polyfill injected into web entry');
+  writeFileSync(entry, html.replace('</head>', `${bridge}\n  </head>`));
+  step('desktop host bridge injected into web entry');
 }
 
 // pnpm deploys every platform's optional native binary, so the Linux closure

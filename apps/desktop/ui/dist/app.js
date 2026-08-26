@@ -54,14 +54,19 @@ function handleBridge(event) {
   }
 }
 
-// The iframe's Notification polyfill posts here (source 'dsh-desktop-notify');
-// show a native OS toast through tauri-plugin-notification.
-function handleNotify(event) {
-  if (!event.data || event.data.source !== 'dsh-desktop-notify') return;
-  if (event.data.kind !== 'show') return;
-  invoke('plugin:notification|notify', {
-    options: { title: event.data.title, body: event.data.body },
-  }).catch((err) => console.error('[desktop] notification failed:', err));
+// The dsh iframe's injected host bridge posts here (source
+// 'dsh-desktop-host'): show native OS toasts through tauri-plugin-notification
+// and open external links in the default browser through the opener plugin.
+function handleHostBridge(event) {
+  if (!event.data || event.data.source !== 'dsh-desktop-host') return;
+  if (event.data.kind === 'notify') {
+    invoke('plugin:notification|notify', {
+      options: { title: event.data.title, body: event.data.body },
+    }).catch((err) => console.error('[desktop] notification failed:', err));
+  } else if (event.data.kind === 'open') {
+    invoke('plugin:opener|open_url', { url: event.data.url })
+      .catch((err) => console.error('[desktop] open failed:', err));
+  }
 }
 
 btnSidebar.addEventListener('click', () => sendToDsh('dsh://sidebar:toggle'));
@@ -74,7 +79,7 @@ document.getElementById('btn-retry').addEventListener('click', () => {
 });
 
 window.addEventListener('message', handleBridge);
-window.addEventListener('message', handleNotify);
+window.addEventListener('message', handleHostBridge);
 frame.addEventListener('load', () => setStatus('ok', '已连接'));
 
 (async () => {

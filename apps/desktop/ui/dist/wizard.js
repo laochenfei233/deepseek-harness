@@ -16,6 +16,7 @@ const PLUGINS = [
   { id: 'dsh-im', spec: '-w @xmanrui/dsh-im', name: 'IM 机器人（企微/飞书/钉钉/微信/QQ）', desc: '扫码或凭据接入 9 个 IM 频道，手机上也能用 Harness' },
   { id: 'dsh-lark', spec: 'dsh-lark', name: '飞书机器人', desc: '飞书/Lark IM bot 频道插件' },
   { id: 'dsh-qqbot', spec: 'dsh-qqbot', name: 'QQ 机器人', desc: 'QQ Bot 接入 DeepSeek Harness（腾讯官方插件）' },
+  { id: 'dsh-vision-router', spec: 'dsh-vision-router', name: '视觉路由', desc: '内置免费视觉链 + 像素级视觉工具（图像问答/OCR/截图等），无需 Python' },
 ];
 
 const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
