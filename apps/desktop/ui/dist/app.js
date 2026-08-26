@@ -54,6 +54,16 @@ function handleBridge(event) {
   }
 }
 
+// The iframe's Notification polyfill posts here (source 'dsh-desktop-notify');
+// show a native OS toast through tauri-plugin-notification.
+function handleNotify(event) {
+  if (!event.data || event.data.source !== 'dsh-desktop-notify') return;
+  if (event.data.kind !== 'show') return;
+  invoke('plugin:notification|notify', {
+    options: { title: event.data.title, body: event.data.body },
+  }).catch((err) => console.error('[desktop] notification failed:', err));
+}
+
 btnSidebar.addEventListener('click', () => sendToDsh('dsh://sidebar:toggle'));
 btnBack.addEventListener('click', () => sendToDsh('dsh://page:prev'));
 btnForward.addEventListener('click', () => sendToDsh('dsh://page:next'));
@@ -64,6 +74,7 @@ document.getElementById('btn-retry').addEventListener('click', () => {
 });
 
 window.addEventListener('message', handleBridge);
+window.addEventListener('message', handleNotify);
 frame.addEventListener('load', () => setStatus('ok', '已连接'));
 
 (async () => {

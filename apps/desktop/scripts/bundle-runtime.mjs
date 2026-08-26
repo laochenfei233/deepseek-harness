@@ -164,6 +164,7 @@ async function deployDsh() {
   mkdirSync(distDest, { recursive: true });
   cpSync(distSrc, distDest, { recursive: true });
   step('web frontend dist copied into deployed closure');
+  injectNotificationBridge(distDest);
 
   // deploy used --ignore-scripts (the repo root postinstall needs lefthook);
   // run the native installs we actually need inside the closure. node-pty's
@@ -200,6 +201,37 @@ async function deployDsh() {
   patchBrokenLinks(repo);
   patchMissingPeers(repo);
   if (PLATFORM === 'linux') pruneForeignLinuxPlatformPackages();
+}
+
+// WebView2 denies the Web Notification permission in cross-origin iframes
+// (wry answers only the clipboard PermissionRequested), so web notification
+// plugins never fire in the desktop. Patch the served entry document with a
+// bridge that, inside the dsh iframe, replaces `Notification` with a
+// postMessage to the shell — which shows a native OS toast through
+// tauri-plugin-notification. Plain-browser `dsh web` users stay untouched:
+// the bridge activates only when a parent frame exists.
+function injectNotificationBridge(distDest) {
+  const entry = join(distDest, 'index.html');
+  if (!existsSync(entry)) return;
+  let html = readFileSync(entry, 'utf8');
+  if (html.includes('dsh-desktop-notify')) return;
+  const polyfill = `<script>
+(() => {
+  if (window === window.parent) return
+  const post = (payload) => window.parent.postMessage({ source: "dsh-desktop-notify", ...payload }, "*")
+  class DshNotification {
+    constructor(title, options = {}) {
+      post({ kind: "show", title, body: options.body ?? "", tag: options.tag ?? null, requireInteraction: options.requireInteraction === true })
+    }
+    close() {}
+    static permission = "granted"
+    static requestPermission() { return Promise.resolve("granted") }
+  }
+  Object.defineProperty(window, "Notification", { configurable: true, value: DshNotification })
+})()
+</script>`;
+  writeFileSync(entry, html.replace('</head>', `${polyfill}\n  </head>`));
+  step('notification bridge polyfill injected into web entry');
 }
 
 // pnpm deploys every platform's optional native binary, so the Linux closure

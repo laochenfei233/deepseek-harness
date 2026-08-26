@@ -59,15 +59,61 @@ fn is_externally_openable(url: &tauri::Url) -> bool {
 /// which is what made `target="_blank"` links dead in the app: WebView2 marks
 /// the request handled with nothing to show, so the click does nothing at all.
 fn open_new_window_externally(app: &tauri::AppHandle, url: &tauri::Url) -> NewWindowResponse<tauri::Wry> {
-    if is_externally_openable(url) && app.opener().open_url(url.as_str(), None::<&str>).is_err() {
-        eprintln!("[desktop] failed to open external URL in default browser: {url}");
+    let openable = is_externally_openable(url);
+    if openable {
+        let opened = app.opener().open_url(url.as_str(), None::<&str>).is_ok()
+            || open_with_os(url.as_str()).is_ok();
+        log_new_window(app, url, openable, opened);
     }
     NewWindowResponse::Deny
+}
+
+/// OS-level fallback for the opener plugin: the shell runs without a console,
+/// so an opener failure is invisible; `cmd start` / `open` / `xdg-open` are
+/// the same calls the plugin wraps.
+fn open_with_os(url: &str) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()
+            .map(|_| ())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(url).status().map(|_| ())
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open").arg(url).status().map(|_| ())
+    }
+}
+
+/// Append one popup-routing record to the shell's debug log. The request is
+/// denied by design, so this file is the only place a dead link leaves a trace.
+fn log_new_window(app: &tauri::AppHandle, url: &tauri::Url, openable: bool, opened: bool) {
+    if let Ok(log_dir) = app.path().app_log_dir() {
+        let _ = std::fs::create_dir_all(&log_dir);
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("new-window.log"))
+        {
+            use std::io::Write;
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+            let _ = writeln!(file, "{ts} {url} openable={openable} opened={opened}");
+        }
+    }
 }
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             build_main_window(app.handle())?;
             let handle = DshHandle::spawn(app.handle())?;
