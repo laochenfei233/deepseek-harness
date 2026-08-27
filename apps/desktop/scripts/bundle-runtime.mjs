@@ -28,14 +28,21 @@ const DSH_DIR = join(RUNTIME, 'dsh');
 const PLUGINS_DIR = join(RUNTIME, 'plugins');
 
 const args = process.argv.slice(2);
-const platformArg = args.find((a) => a.startsWith('--platform='))?.split('=')[1];
-const archArg = args.find((a) => a.startsWith('--arch='))?.split('=')[1];
-const nodeArg = args.find((a) => a.startsWith('--node-version='))?.split('=')[1];
 
-const PLATFORM = platformArg ?? hostPlatform();
+// Accept both `--flag=value` and `--flag value` spellings; the CI workflow
+// passes the space-separated form.
+function argValue(flag) {
+  const eq = args.find((a) => a.startsWith(`${flag}=`))?.slice(flag.length + 1);
+  if (eq !== undefined) return eq;
+  const index = args.indexOf(flag);
+  return index !== -1 ? args[index + 1] : undefined;
+}
+
+const PLATFORM = argValue('--platform') ?? hostPlatform();
 // macOS ships both arm64 and Intel; CI builds one runtime per arch. Other
 // platforms are x64 only.
-const ARCH = archArg ?? (PLATFORM === 'mac' ? 'arm64' : 'x64');
+const ARCH = argValue('--arch') ?? (PLATFORM === 'mac' ? 'arm64' : 'x64');
+const nodeArg = argValue('--node-version');
 const DSH = '@deepseek-ai/dsh';
 
 function hostPlatform() {
