@@ -12,7 +12,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import {
   DEFAULT_PROFILE_BUNDLES,
   initProfile,
@@ -23,7 +23,6 @@ import {
   writeProfileManifest,
   type ProfileManifest,
 } from '@deepseek-ai/dsh-app-boot'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { INSTALL_ANCHOR } from './profile-boot.ts'
 
 const NAME = 'dsh'
@@ -40,30 +39,51 @@ export interface ResolvedPnpm {
 }
 
 /**
+ * The desktop bundle's node distribution ships alongside the dsh closure at
+ * `<runtime>/node` with a bundled pnpm in `<runtime>/node/node_modules/.bin`;
+ * this CLI's `INSTALL_ANCHOR` (its package.json) sits one level under that
+ * closure root in the deployed layout (`<runtime>/dsh/package.json`). Returns
+ * the shim path in that layout, or undefined when the anchor layout is not the
+ * deployed runtime one (a plain npm global install).
+ * @param installAnchor - this CLI's package.json path (resolution anchor).
+ * @returns the runtime pnpm shim path, or undefined when the layout does not match.
+ */
+export function runtimePnpmCandidate(installAnchor: string): string | undefined {
+  const runtimeRoot = dirname(dirname(installAnchor))
+  const shim = join(runtimeRoot, 'node', 'node_modules', '.bin', process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')
+  return existsSync(shim) ? shim : undefined
+}
+
+/**
  * Resolve the pnpm executable for profile plugin management. Candidate order:
  * `PNPM_BINARY` (explicit override), `pnpm` on PATH, then the desktop
- * runtime's bundled pnpm exposed through `$DSH_HOME/node_modules/.bin` (the
- * desktop shell junctions the runtime's node_modules there). A candidate is
- * accepted when `pnpm --version` runs; PATH candidates cannot be stat-checked,
- * so the probe is the single acceptance test. A broken `PNPM_BINARY` falls
- * through to the next candidate instead of failing the invocation.
+ * runtime's bundled pnpm next to this CLI (`<runtime>/node/node_modules/.bin`,
+ * which the desktop shell also prepends to the spawned `dsh web` PATH). A
+ * candidate is accepted when `pnpm --version` runs; PATH candidates cannot be
+ * stat-checked, so the probe is the single acceptance test. A broken
+ * `PNPM_BINARY` falls through to the next candidate instead of failing the
+ * invocation.
  * @returns the command to spawn, or undefined when no candidate works.
  */
 export function resolvePnpm(): ResolvedPnpm | undefined {
   const candidates: ResolvedPnpm[] = []
   const envBinary = process.env[PNPM_BINARY_ENV]
   if (envBinary !== undefined && envBinary !== '') {
-    candidates.push({ command: envBinary, shell: false })
+    candidates.push({ command: envBinary, shell: process.platform === 'win32' })
   }
   candidates.push({ command: 'pnpm', shell: process.platform === 'win32' })
-  const shimName = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
-  candidates.push({ command: join(resolveDshHome(), 'node_modules', '.bin', shimName), shell: process.platform === 'win32' })
+  const runtimeShim = runtimePnpmCandidate(INSTALL_ANCHOR)
+  if (runtimeShim !== undefined) {
+    candidates.push({ command: runtimeShim, shell: process.platform === 'win32' })
+  }
   for (const candidate of candidates) {
     // Shell candidates concatenate arguments into the command string: passing
     // args separately triggers the DEP0190 shell-injection warning and, on
-    // Windows, .cmd shims ignore them anyway.
+    // Windows, .cmd shims ignore them anyway. Quote paths with spaces; the
+    // no-shell probe spawns the path directly and must stay unquoted.
+    const quoted = candidate.shell && /\s/.test(candidate.command) ? `"${candidate.command}"` : candidate.command
     const probe = candidate.shell
-      ? spawnSync(`${candidate.command} --version`, { shell: true, stdio: 'ignore' })
+      ? spawnSync(`${quoted} --version`, { shell: true, stdio: 'ignore' })
       : spawnSync(candidate.command, ['--version'], { stdio: 'ignore' })
     if (probe.error === undefined && probe.status === 0) return candidate
   }
@@ -177,7 +197,10 @@ export function runPlugin(profile: string, args: readonly string[]): number {
   // Windows resolves pnpm through its .cmd shim, which spawn() refuses
   // without a shell since the CVE-2024-27980 hardening. The shell is cmd.exe;
   // hide its console so a GUI parent (the desktop shell) never flashes one.
-  const result = spawnSync(pnpm.command, args.map(argument => anchorPathSpec(argument, process.cwd())), {
+  // Shell mode concatenates command and args, so an absolute shim path with
+  // spaces needs quoting.
+  const command = pnpm.shell && /\s/.test(pnpm.command) ? `"${pnpm.command}"` : pnpm.command
+  const result = spawnSync(command, args.map(argument => anchorPathSpec(argument, process.cwd())), {
     cwd: dir,
     stdio: 'inherit',
     shell: pnpm.shell,

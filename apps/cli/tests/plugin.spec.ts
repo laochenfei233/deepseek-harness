@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { resolvePnpm } from '../src/plugin.ts'
+import { resolvePnpm, runtimePnpmCandidate } from '../src/plugin.ts'
 
 const shimName = (): string => (process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')
 
@@ -17,6 +17,30 @@ function writeFakeShim(binDir: string): string {
   }
   return file
 }
+
+describe('runtimePnpmCandidate', () => {
+  it('resolves the runtime sibling layout (deployed desktop bundle)', () => {
+    const runtime = mkdtempSync(join(tmpdir(), 'dsh-runtime-'))
+    try {
+      const binDir = join(runtime, 'node', 'node_modules', '.bin')
+      writeFakeShim(binDir)
+      const anchor = join(runtime, 'dsh', 'package.json')
+      expect(runtimePnpmCandidate(anchor)).toBe(join(binDir, shimName()))
+    } finally {
+      rmSync(runtime, { recursive: true, force: true })
+    }
+  })
+
+  it('returns undefined for a non-runtime layout (npm global install)', () => {
+    const nodeModules = mkdtempSync(join(tmpdir(), 'dsh-npm-'))
+    try {
+      const anchor = join(nodeModules, '@deepseek-ai', 'dsh', 'package.json')
+      expect(runtimePnpmCandidate(anchor)).toBeUndefined()
+    } finally {
+      rmSync(nodeModules, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('resolvePnpm', () => {
   let home: string
@@ -36,17 +60,6 @@ describe('resolvePnpm', () => {
   it('prefers PNPM_BINARY over every other candidate', () => {
     vi.stubEnv('PNPM_BINARY', process.execPath) // node --version exits 0
     expect(resolvePnpm()?.command).toBe(process.execPath)
-  })
-
-  it('falls through a broken PNPM_BINARY to the DSH_HOME shim', () => {
-    vi.stubEnv('PNPM_BINARY', join(home, 'missing-pnpm'))
-    const shim = writeFakeShim(join(home, 'node_modules', '.bin'))
-    expect(resolvePnpm()?.command).toBe(shim)
-  })
-
-  it('uses the DSH_HOME shim when PATH has no pnpm', () => {
-    const shim = writeFakeShim(join(home, 'node_modules', '.bin'))
-    expect(resolvePnpm()?.command).toBe(shim)
   })
 
   it('returns undefined when no candidate resolves', () => {

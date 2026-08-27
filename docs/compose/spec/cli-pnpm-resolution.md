@@ -29,17 +29,17 @@ After the `cpSync` of the pnpm package into `runtime/node/node_modules/pnpm`, wr
 - `pnpm.cmd` (Windows): `@node "%~dp0\..\pnpm\bin\pnpm.cjs" %*`;
 - `pnpx` / `pnpx.cmd` shims for the companion binary.
 
-The shell already prepends `runtime/node/node_modules/.bin` to the spawned `dsh web` PATH, so the market finds pnpm; the CLI finds it through the `$DSH_HOME` fallback below.
+The shell already prepends `runtime/node/node_modules/.bin` to the spawned `dsh web` PATH, so the market finds pnpm; the CLI finds the same shim through the runtime-sibling fallback below.
 
 ### Resolve pnpm in the CLI (`apps/cli/src/plugin.ts`)
 
 New `resolvePnpm()` returns the command to run or `undefined`. Candidate order:
 
-1. `PNPM_BINARY` environment variable (explicit override; run as given, no shell on POSIX);
+1. `PNPM_BINARY` environment variable (explicit override; shell on Windows, none on POSIX);
 2. `pnpm` on PATH (current behaviour);
-3. `$DSH_HOME/node_modules/.bin/pnpm` (`.cmd` on Windows) — the desktop runtime junction created by `ensure_home_node_modules` exposes the shims above.
+3. The runtime-sibling shim `<runtime>/node/node_modules/.bin/pnpm` (`.cmd` on Windows): this CLI's `INSTALL_ANCHOR` (its package.json) sits one level under the deployed closure root (`<runtime>/dsh/package.json`), so two `dirname`s reach `<runtime>`; the candidate is stat-checked and only added when the shim exists.
 
-A candidate is accepted when a probe `spawnSync(command, ['--version'], { shell: platform === 'win32', stdio: 'ignore' })` does not error and exits 0; PATH candidates cannot be `existsSync`-checked, so the probe is the single acceptance test. `$DSH_HOME` resolves through `@deepseek-ai/dsh-home-paths` (`resolveDshHome`), already a dependency of the app (`profile-boot.ts` imports it).
+A candidate is accepted when a probe `pnpm --version` does not error and exits 0 (shell candidates concatenate the flag into the command string to avoid the DEP0190 shell-injection warning; paths with spaces are quoted); PATH candidates cannot be `existsSync`-checked, so the probe is the single acceptance test. The `$DSH_HOME/node_modules` junction is deliberately not a candidate: it targets the deploy closure's node_modules, which has no pnpm.
 
 `runPlugin` uses the resolved command (with `shell` set for Windows `.cmd` shims, as today) and, when nothing resolves, prints actionable guidance — `npm install -g pnpm` or `corepack enable pnpm` — before returning 127.
 
@@ -58,5 +58,5 @@ A candidate is accepted when a probe `spawnSync(command, ['--version'], { shell:
 ## Tasks
 
 - [ ] T1: bundle-runtime shims — acceptance: bundle-runtime.mjs writes pnpm/pnpx shims (POSIX + .cmd) after the pnpm package copy; `node --check bundle-runtime.mjs` clean (covers: S2 Ship the bundled pnpm shims)
-- [ ] T2: CLI resolvePnpm candidate chain — acceptance: plugin.ts probes PNPM_BINARY → PATH → `$DSH_HOME/node_modules/.bin/pnpm`, uses the first that works, and prints actionable guidance when none does (covers: S2 Resolve pnpm in the CLI)
-- [ ] T3: plugin resolution tests — acceptance: apps/cli/tests/plugin.spec.ts covers PNPM_BINARY precedence, DSH_HOME fallback, all-missing guidance, and probe rejection of a broken candidate; `pnpm --filter @deepseek-ai/dsh test` passes (covers: S2)
+- [ ] T2: CLI resolvePnpm candidate chain — acceptance: plugin.ts probes PNPM_BINARY → PATH → runtime-sibling shim, uses the first that works, and prints actionable guidance when none does (covers: S2 Resolve pnpm in the CLI)
+- [ ] T3: plugin resolution tests — acceptance: apps/cli/tests/plugin.spec.ts covers PNPM_BINARY precedence, runtimePnpmCandidate layout resolution (deployed vs npm-global), and all-missing undefined; `vitest run apps/cli/tests/plugin.spec.ts` passes (covers: S2)

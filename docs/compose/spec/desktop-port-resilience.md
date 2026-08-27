@@ -25,7 +25,7 @@ Port selection happens per spawn inside the supervisor loop; the frontend learns
 
 ### Port selection (Rust, `dsh_runner.rs`)
 
-- `fn select_port() -> Result<u16, String>`: when `INTERNAL_PORT` (3081) accepts a bind, use it; otherwise scan `3082..=3130` and return the first port whose bind succeeds (probe via `std::net::TcpListener::bind`, dropped before spawning). If none is free, return `Err` with a message naming the occupied range.
+- `fn select_port() -> Result<u16, String>`: when `INTERNAL_PORT` (3081) accepts a bind, use it; otherwise scan 50 ports starting at 3082 (3082..=3131) and return the first port whose bind succeeds (probe via `std::net::TcpListener::bind`, dropped before spawning). If none is free, return `Err` with a message naming the occupied range.
 - `spawn_child` returns `(Child, u16)` — the child and the port it was told to listen on (`--port <port>` argument). Selection runs on every spawn, so after an external occupier releases 3081 a restart naturally returns to the default port.
 - The supervisor (`supervise`) threads the port through: `wait_ready(port, ...)`, the readiness event `app.emit("dsh://ready", port)`, the port-takeover check (`port_open(port)` → `wait_port_closed(port)`), and the `dsh://restarted-by-plugin` event (payload = port).
 - `DshHandle` gains `port: Arc<AtomicU16>` (initialised to `INTERNAL_PORT`, stored after each successful spawn); `port()` returns the current value, so `dsh_status` reports the live port and `running` probes it.
