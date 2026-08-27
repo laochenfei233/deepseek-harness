@@ -213,6 +213,11 @@ fn install_local_plugin(app: &AppHandle, name: &str) -> Result<String, String> {
 pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
     let home = dsh_home();
     let profile = profile_web_dir(&home);
+    // The patch layer below writes into the profile directory. Windows used
+    // to create it as a side effect of the win-terminal copy; POSIX never
+    // did, so a fresh profile left the patch write failing with ENOENT and
+    // the hub never spawning (blank shell window, no logs).
+    fs::create_dir_all(&profile).map_err(|e| e.to_string())?;
     let runtime_plugins = match runtime_plugins_dir(app) {
         Ok(dir) => dir,
         Err(_) => return Ok(()), // dev without bundled plugins: nothing to preinstall
