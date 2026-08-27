@@ -226,7 +226,7 @@ async function deployDsh() {
   patchBrokenLinks(repo);
   patchMissingPeers(repo);
   if (PLATFORM === 'linux') pruneForeignLinuxPlatformPackages();
-  if (PLATFORM === 'mac') pruneForeignMacNativeModules();
+  if (PLATFORM === 'mac' || PLATFORM === 'linux') pruneForeignNativeModules();
   // Last: flattenClosure and the patch passes rebuild node_modules from the
   // store, which would overwrite an earlier dist patch.
   injectNotificationBridge(distDest);
@@ -338,35 +338,37 @@ function pruneForeignLinuxPlatformPackages() {
   step(`pruned ${hits.length + subHits} foreign/musl path(s) from dsh closure`);
 }
 
-// macOS closures carry dead native files: Windows-only binaries (node-pty's
-// conpty DLLs are renamed to .node and shipped on every platform) and
-// wrong-arch prebuild copies left by the workspace install. Loading an arm64
-// pty.node from an x64 node crashes at startup, so delete every *.node whose
-// architecture does not cover the bundle target (PE/ELF/unknown are not
-// loadable on macOS and go too).
-function pruneForeignMacNativeModules() {
+// Closures carry dead native files: Windows-only binaries (node-pty's conpty
+// DLLs are renamed to .node and shipped on every platform) and wrong-arch
+// prebuild copies left by the workspace install (a pty.node built for the
+// other CPU shows up on both mac and linux closures). Loading a wrong-arch
+// .node crashes the app at startup, so delete every *.node whose architecture
+// does not cover the bundle target (files that are not loadable Mach-O/ELF go
+// too). Parses headers directly instead of shelling out to file/lipo.
+function pruneForeignNativeModules() {
   const topNm = join(DSH_DIR, 'node_modules');
-  // CPU_TYPE_X86_64 = 0x01000007, CPU_TYPE_ARM64 = 0x0100000c (masked below).
-  const target = ARCH === 'x64' ? 0x07 : 0x0c;
+  const isX64 = ARCH === 'x64';
+  const targetCputype = isX64 ? 0x07 : 0x0c;   // CPU_TYPE_X86_64 / ARM64
+  const targetMachine = isX64 ? 62 : 183;      // EM_X86_64 / EM_AARCH64
   let removed = 0;
   const visit = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
         visit(full);
-      } else if (entry.name.endsWith('.node') && !machoCovers(full, target)) {
+      } else if (entry.name.endsWith('.node') && !nativeCovers(full, targetCputype, targetMachine)) {
         rmSync(full, { force: true });
         removed += 1;
       }
     }
   };
   visit(topNm);
-  step(`pruned ${removed} foreign-arch native module(s) from macOS closure`);
+  step(`pruned ${removed} foreign-arch native module(s) from ${PLATFORM} closure`);
 }
 
-// True when the file is a Mach-O (thin or fat) covering `cputype` (the masked
-// CPU type). Parses the header directly instead of shelling out to `file`/`lipo`.
-function machoCovers(file, cputype) {
+// True when the file's declared architectures cover the target (Mach-O thin
+// or fat via cputype, ELF via e_machine). PE and unknown formats never cover.
+function nativeCovers(file, cputype, machine) {
   const fd = openSync(file, 'r');
   const buf = Buffer.alloc(4096);
   let n = 0;
@@ -377,11 +379,11 @@ function machoCovers(file, cputype) {
   }
   const head = buf.subarray(0, n);
   if (n < 8) return false;
-  const magic = head.readUInt32BE(0);
   const covers = (value) => (value & 0x00ff_ffff) === cputype;
+  const magic = head.readUInt32BE(0);
   if (magic === 0xfeedface || magic === 0xfeedfacf) return covers(head.readUInt32BE(4));
   if (magic === 0xcefaedfe || magic === 0xcffaedfe) return covers(head.readUInt32LE(4));
-  if (magic === 0xcafebabe && n >= 8) {
+  if (magic === 0xcafebabe) {
     const count = head.readUInt32BE(4);
     for (let i = 0; i < count; i++) {
       const off = 8 + i * 20;
@@ -389,6 +391,9 @@ function machoCovers(file, cputype) {
       if (covers(head.readUInt32BE(off))) return true;
     }
     return false;
+  }
+  if (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46 && n >= 20) {
+    return head.readUInt16LE(18) === machine;
   }
   return false;
 }
