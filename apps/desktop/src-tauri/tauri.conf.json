@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; frame-src http://127.0.0.1:3081; connect-src http://127.0.0.1:3081 ws://127.0.0.1:3081; img-src 'self' http://127.0.0.1:3081 data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self'; frame-src http://127.0.0.1:*; connect-src http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' http://127.0.0.1:* data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     }
   },
   "bundle": {

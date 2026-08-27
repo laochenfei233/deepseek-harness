@@ -14,7 +14,7 @@ scripts/bundle-runtime.mjs  打包 Node 运行时 + pnpm deploy 的 dsh 闭包 +
 runtime/              打包产物（不入库，CI 生成；tauri.conf.json 将其映射为 bundle resources）
 ```
 
-端口约定：壳内 `dsh web` 固定监听 `127.0.0.1:3081`，WebView 同源直连（CLI 用户的 `dsh web` 默认 3080 不受影响）。`/api`（含 `host.openPath`、WebSocket 下行、SSE）全部由 dsh 自身提供，壳不做反向代理。壳不渲染顶部导航栏，界面完全由 dsh UI 自身提供；壳与 iframe 之间只走宿主桥（`source: 'dsh-desktop-host'` 的通知与外部链接消息）。
+端口约定：壳内 `dsh web` 默认监听 `127.0.0.1:3081`；该端口被外部进程占用时，壳自动向上扫描空闲端口（3082 起）并以 `--port` 传入，实际端口通过 `dsh://ready` 事件负载交给前端加载（前端不再内置固定地址）。CLI 用户的 `dsh web` 默认 3080 不受影响。`/api`（含 `host.openPath`、WebSocket 下行、SSE）全部由 dsh 自身提供，壳不做反向代理。壳不渲染顶部导航栏，界面完全由 dsh UI 自身提供；壳与 iframe 之间只走宿主桥（`source: 'dsh-desktop-host'` 的通知与外部链接消息）。
 
 ## 开发
 

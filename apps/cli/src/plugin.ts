@@ -12,7 +12,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import {
   DEFAULT_PROFILE_BUNDLES,
   initProfile,
@@ -26,6 +26,69 @@ import {
 import { INSTALL_ANCHOR } from './profile-boot.ts'
 
 const NAME = 'dsh'
+
+/** Environment variable naming the pnpm executable to use for plugin management. */
+const PNPM_BINARY_ENV = 'PNPM_BINARY'
+
+/** A resolved pnpm executable and whether spawning it needs a shell. */
+export interface ResolvedPnpm {
+  /** Command to run: a PATH name or an absolute shim path. */
+  command: string
+  /** Windows `.cmd` shims need a shell; POSIX absolute paths do not. */
+  shell: boolean
+}
+
+/**
+ * The desktop bundle's node distribution ships alongside the dsh closure at
+ * `<runtime>/node` with a bundled pnpm in `<runtime>/node/node_modules/.bin`;
+ * this CLI's `INSTALL_ANCHOR` (its package.json) sits one level under that
+ * closure root in the deployed layout (`<runtime>/dsh/package.json`). Returns
+ * the shim path in that layout, or undefined when the anchor layout is not the
+ * deployed runtime one (a plain npm global install).
+ * @param installAnchor - this CLI's package.json path (resolution anchor).
+ * @returns the runtime pnpm shim path, or undefined when the layout does not match.
+ */
+export function runtimePnpmCandidate(installAnchor: string): string | undefined {
+  const runtimeRoot = dirname(dirname(installAnchor))
+  const shim = join(runtimeRoot, 'node', 'node_modules', '.bin', process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')
+  return existsSync(shim) ? shim : undefined
+}
+
+/**
+ * Resolve the pnpm executable for profile plugin management. Candidate order:
+ * `PNPM_BINARY` (explicit override), `pnpm` on PATH, then the desktop
+ * runtime's bundled pnpm next to this CLI (`<runtime>/node/node_modules/.bin`,
+ * which the desktop shell also prepends to the spawned `dsh web` PATH). A
+ * candidate is accepted when `pnpm --version` runs; PATH candidates cannot be
+ * stat-checked, so the probe is the single acceptance test. A broken
+ * `PNPM_BINARY` falls through to the next candidate instead of failing the
+ * invocation.
+ * @returns the command to spawn, or undefined when no candidate works.
+ */
+export function resolvePnpm(): ResolvedPnpm | undefined {
+  const candidates: ResolvedPnpm[] = []
+  const envBinary = process.env[PNPM_BINARY_ENV]
+  if (envBinary !== undefined && envBinary !== '') {
+    candidates.push({ command: envBinary, shell: process.platform === 'win32' })
+  }
+  candidates.push({ command: 'pnpm', shell: process.platform === 'win32' })
+  const runtimeShim = runtimePnpmCandidate(INSTALL_ANCHOR)
+  if (runtimeShim !== undefined) {
+    candidates.push({ command: runtimeShim, shell: process.platform === 'win32' })
+  }
+  for (const candidate of candidates) {
+    // Shell candidates concatenate arguments into the command string: passing
+    // args separately triggers the DEP0190 shell-injection warning and, on
+    // Windows, .cmd shims ignore them anyway. Quote paths with spaces; the
+    // no-shell probe spawns the path directly and must stay unquoted.
+    const quoted = candidate.shell && /\s/.test(candidate.command) ? `"${candidate.command}"` : candidate.command
+    const probe = candidate.shell
+      ? spawnSync(`${quoted} --version`, { shell: true, stdio: 'ignore' })
+      : spawnSync(candidate.command, ['--version'], { stdio: 'ignore' })
+    if (probe.error === undefined && probe.status === 0) return candidate
+  }
+  return undefined
+}
 
 /**
  * Whether a resolved dependency exports a profile patch, i.e. is a bundle.
@@ -124,21 +187,26 @@ export function runPlugin(profile: string, args: readonly string[]): number {
     process.stderr.write(`${NAME}: initialized profile ${profile} at ${dir}\n`)
   }
   const before = readProfileManifest(NAME, dir)
+  const pnpm = resolvePnpm()
+  if (pnpm === undefined) {
+    process.stderr.write(
+      `${NAME}: pnpm not found — install it with \`npm install -g pnpm\` or \`corepack enable pnpm\` to manage profile plugins\n`,
+    )
+    return 127
+  }
   // Windows resolves pnpm through its .cmd shim, which spawn() refuses
   // without a shell since the CVE-2024-27980 hardening. The shell is cmd.exe;
   // hide its console so a GUI parent (the desktop shell) never flashes one.
-  const result = spawnSync('pnpm', args.map(argument => anchorPathSpec(argument, process.cwd())), {
+  // Shell mode concatenates command and args, so an absolute shim path with
+  // spaces needs quoting.
+  const command = pnpm.shell && /\s/.test(pnpm.command) ? `"${pnpm.command}"` : pnpm.command
+  const result = spawnSync(command, args.map(argument => anchorPathSpec(argument, process.cwd())), {
     cwd: dir,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    shell: pnpm.shell,
     windowsHide: true,
   })
   if (result.error !== undefined) {
-    const code = (result.error as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') {
-      process.stderr.write(`${NAME}: pnpm not found on PATH — install pnpm to manage profile plugins\n`)
-      return 127
-    }
     throw result.error
   }
   const exitCode = result.status ?? 1
