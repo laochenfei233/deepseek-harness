@@ -113,19 +113,23 @@ jobs:
           # lipo lists every arch of a Mach-O (universal binaries carry both
           # and are valid for either target); the file fallback serves Linux,
           # where the binary reports x86_64 (mapped to the matrix's x64).
+          # The step runs with `set -e -o pipefail`, so a failing lipo must
+          # not abort mid-loop: fall back to file and neutralize the exit.
           archs_of() {
+            local raw
             if command -v lipo >/dev/null 2>&1; then
-              lipo -archs "$1" 2>/dev/null | tr ' ' '\n' | sed 's/x86_64/x64/'
+              raw=$(lipo -archs "$1" 2>/dev/null) || raw=$(file -b "$1")
             else
-              file -b "$1" | grep -oE 'x86_64|arm64' | head -1 | sed 's/x86_64/x64/'
+              raw=$(file -b "$1")
             fi
+            echo "$raw" | grep -oE 'x86_64|arm64' | head -1 | sed 's/x86_64/x64/'
           }
-          node_arch=$(archs_of runtime/node/node)
+          node_arch=$(archs_of runtime/node/node || true)
           echo "runtime node arch: $node_arch (expected $EXPECTED)"
           echo "$node_arch" | grep -qw "$EXPECTED" || { echo "ERROR: node arch mismatch"; exit 1; }
           bad=0
           for f in $(find runtime/dsh/node_modules -name '*.node'); do
-            a=$(archs_of "$f")
+            a=$(archs_of "$f" || true)
             echo "  $(basename "$f") -> $a"
             echo "$a" | grep -qw "$EXPECTED" || bad=1
           done
@@ -181,5 +185,5 @@ jobs:
         if: always()
         shell: bash
         run: |
-          mv -f pnpm-workspace.yaml.bak pnpm-workspace.yaml
+          [ -f pnpm-workspace.yaml.bak ] && mv -f pnpm-workspace.yaml.bak pnpm-workspace.yaml || true
           git checkout -- package.json
