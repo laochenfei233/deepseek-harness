@@ -110,14 +110,24 @@ jobs:
         shell: bash
         run: |
           EXPECTED="${{ matrix.arch }}"
-          node_arch=$(file -b runtime/node/node | grep -oE 'x86_64|arm64' | head -1)
+          # lipo lists every arch of a Mach-O (universal binaries carry both
+          # and are valid for either target); the file fallback serves Linux,
+          # where the binary reports x86_64 (mapped to the matrix's x64).
+          archs_of() {
+            if command -v lipo >/dev/null 2>&1; then
+              lipo -archs "$1" 2>/dev/null | tr ' ' '\n' | sed 's/x86_64/x64/'
+            else
+              file -b "$1" | grep -oE 'x86_64|arm64' | head -1 | sed 's/x86_64/x64/'
+            fi
+          }
+          node_arch=$(archs_of runtime/node/node)
           echo "runtime node arch: $node_arch (expected $EXPECTED)"
-          test "$node_arch" = "$EXPECTED"
+          echo "$node_arch" | grep -qw "$EXPECTED" || { echo "ERROR: node arch mismatch"; exit 1; }
           bad=0
           for f in $(find runtime/dsh/node_modules -name '*.node'); do
-            a=$(file -b "$f" | grep -oE 'x86_64|arm64' | head -1)
+            a=$(archs_of "$f")
             echo "  $(basename "$f") -> $a"
-            [ "$a" = "$EXPECTED" ] || bad=1
+            echo "$a" | grep -qw "$EXPECTED" || bad=1
           done
           test "$bad" -eq 0
 
