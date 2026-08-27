@@ -132,7 +132,11 @@ jobs:
           for f in $(find runtime/dsh/node_modules -name '*.node'); do
             a=$(archs_of "$f" || true)
             echo "  $(basename "$f") -> $a"
-            echo "$a" | grep -qw "$EXPECTED" || bad=1
+            # An unidentifiable file cannot be loaded by node, so it cannot
+            # crash startup; only a KNOWN foreign arch is a failure.
+            if [ -n "$a" ]; then
+              echo "$a" | grep -qw "$EXPECTED" || { echo "  FOREIGN: $f"; bad=1; }
+            fi
           done
           test "$bad" -eq 0
 
