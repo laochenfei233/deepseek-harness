@@ -206,7 +206,10 @@ fn install_local_plugin(app: &AppHandle, name: &str) -> Result<String, String> {
 
 /// Preinstalled default plugins (plugin market + Windows terminal
 /// inspector). The shell copies them from the bundled runtime into the web
-/// profile on first launch — the wizard no longer installs them.
+/// profile on first launch — the wizard no longer installs them. The
+/// win-terminal-inspector copy AND its patch row are gated on the plugin
+/// being present in the runtime: mac/linux bundles do not ship it, and an
+/// entry the loader cannot resolve crashes the hub on every startup.
 pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
     let home = dsh_home();
     let profile = profile_web_dir(&home);
@@ -225,12 +228,13 @@ pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
 
     // dsh-win-terminal-inspector has no npm distribution; it ships as a local
     // copy inside the profile's plugins directory.
-    let src = runtime_plugins.join("dsh-win-terminal-inspector");
-    if src.exists() {
+    let win_src = runtime_plugins.join("dsh-win-terminal-inspector");
+    let win_present = win_src.exists();
+    if win_present {
         let dest = profile.join("plugins").join("dsh-win-terminal-inspector");
         if !dest.exists() {
             fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
-            copy_dir(&src, &dest)?;
+            copy_dir(&win_src, &dest)?;
         }
     }
 
@@ -242,10 +246,17 @@ pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
         .unwrap_or_default();
     upsert_patch_row(&mut rows, "dsh-plugin",
         "insert:\n  - id: dsh-plugin\n    name: dsh-plugin\n")?;
-    if !has_patch_row(&rows, "win-terminal-inspector") {
-        rows.push(serde_yaml::from_str(
-            "insert:\n  - id: win-terminal-inspector\n    name: ./plugins/dsh-win-terminal-inspector/index.js\n",
-        ).map_err(|e| format!("build patch row: {e}"))?);
+    if win_present {
+        if !has_patch_row(&rows, "win-terminal-inspector") {
+            rows.push(serde_yaml::from_str(
+                "insert:\n  - id: win-terminal-inspector\n    name: ./plugins/dsh-win-terminal-inspector/index.js\n",
+            ).map_err(|e| format!("build patch row: {e}"))?);
+        }
+    } else {
+        // Self-heal: older builds wrote the row unconditionally, and the
+        // loader fails hard on the missing entry — drop it where the plugin
+        // is not shipped.
+        remove_patch_row(&mut rows, "win-terminal-inspector");
     }
     // MCP servers are per-instance config rows on the built-in mcp-client
     // bridge (already shipped in the runtime closure); a commented template
@@ -305,6 +316,15 @@ fn upsert_patch_row(rows: &mut Vec<Yaml>, id: &str, row_yaml: &str) -> Result<()
         None => rows.push(row),
     }
     Ok(())
+}
+
+/// Drop every patch row whose insert list contains `id`.
+fn remove_patch_row(rows: &mut Vec<Yaml>, id: &str) {
+    rows.retain(|row| {
+        !row.get("insert")
+            .and_then(|ins| ins.as_sequence())
+            .is_some_and(|seq| seq.iter().any(|e| e.get("id").and_then(Yaml::as_str) == Some(id)))
+    });
 }
 
 fn has_patch_row(rows: &[Yaml], id: &str) -> bool {
