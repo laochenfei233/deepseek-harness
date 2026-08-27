@@ -1,14 +1,20 @@
 ---
 feature: desktop-port-resilience
-status: designed
+status: delivered
 updated: 2026-08-27
 branch: feat/desktop-port-pnpm
-commits: <base-sha>..<head-sha> # filled at delivery
+commits: bdabcc741..03012546d
 ---
 
 # Desktop Port Resilience
 
 ## Report
+
+**What was built** — Port selection moved into the supervisor and runs on every spawn: `select_port()` returns 3081 when it accepts a bind, otherwise the first bindable port in 3082..=3131. `spawn_child` returns the chosen port; `supervise` threads it through `wait_ready`, the port-takeover check, and the `dsh://ready` / `dsh://restarted-by-plugin` event payloads; `DshHandle` tracks the live port for `dsh_status`. The frontend probes `dsh_status` for an already-running hub and otherwise loads the iframe from the ready-event port, keeping a plain 3081 fallback only for browser previews without the Tauri bridge. The build-time CSP widened to loopback port wildcards (`http://127.0.0.1:*`, `ws://127.0.0.1:*`) since a compiled-in CSP cannot change at runtime.
+
+**Verification** — `cargo test` in `apps/desktop/src-tauri`: 2/2 pass (select_port default-when-free and occupied-port-skip); `node --check apps/desktop/ui/dist/app.js` clean; reviewer-verified against all four acceptance criteria.
+
+**Journey log** — The `$DSH_HOME/node_modules` junction turned out to target the deploy closure, not the node distribution — the same trap the pnpm-resolution review caught (see cli-pnpm-resolution). The CSP cannot be dynamic; the fix was a static port wildcard, decided before implementation.
 
 ## [S1] Problem
 
@@ -62,7 +68,7 @@ default-src 'self'; frame-src http://127.0.0.1:*; connect-src http://127.0.0.1:*
 
 ## Tasks
 
-- [ ] T1: Rust port selection + threaded supervisor events — acceptance: `select_port` unit test passes; `cargo check` and `cargo test` clean; ready/restarted-by-plugin events carry the chosen port (covers: S2 Port selection)
-- [ ] T2: CSP port wildcard — acceptance: `tauri.conf.json` csp uses `http://127.0.0.1:*` / `ws://127.0.0.1:*`; `cargo check` clean (covers: S2 CSP)
-- [ ] T3: Frontend dynamic port loading — acceptance: app.js loads the iframe from the event payload port, probes `dsh_status` for an already-running hub, and keeps the 3081 fallback for plain browsers; `node --check app.js` clean (covers: S2 Frontend)
-- [ ] T4: README port contract update — acceptance: apps/desktop/README.md describes default-3081-with-fallback and event-driven port delivery (covers: S2)
+- [x] T1: Rust port selection + threaded supervisor events — acceptance: `select_port` unit test passes; `cargo check` and `cargo test` clean; ready/restarted-by-plugin events carry the chosen port (covers: S2 Port selection)
+- [x] T2: CSP port wildcard — acceptance: `tauri.conf.json` csp uses `http://127.0.0.1:*` / `ws://127.0.0.1:*`; `cargo check` clean (covers: S2 CSP)
+- [x] T3: Frontend dynamic port loading — acceptance: app.js loads the iframe from the event payload port, probes `dsh_status` for an already-running hub, and keeps the 3081 fallback for plain browsers; `node --check app.js` clean (covers: S2 Frontend)
+- [x] T4: README port contract update — acceptance: apps/desktop/README.md describes default-3081-with-fallback and event-driven port delivery (covers: S2)
