@@ -100,6 +100,27 @@ jobs:
         working-directory: apps/desktop
         run: node scripts/bundle-runtime.mjs --platform ${{ matrix.runtime-platform }} --arch ${{ matrix.arch }}
 
+      # Cross-arch bundles silently produce broken closures when any native
+      # module resolves for the wrong architecture (an x64 node loading an
+      # arm64 .node crashes at startup). `file` the bundled node and every
+      # native module and fail loudly on a mismatch.
+      - name: Verify closure architecture
+        if: matrix.platform == 'macos-latest' || matrix.platform == 'ubuntu-latest'
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          EXPECTED="${{ matrix.arch }}"
+          node_arch=$(file -b runtime/node/node | grep -oE 'x86_64|arm64' | head -1)
+          echo "runtime node arch: $node_arch (expected $EXPECTED)"
+          test "$node_arch" = "$EXPECTED"
+          bad=0
+          for f in $(find runtime/dsh/node_modules -name '*.node'); do
+            a=$(file -b "$f" | grep -oE 'x86_64|arm64' | head -1)
+            echo "  $(basename "$f") -> $a"
+            [ "$a" = "$EXPECTED" ] || bad=1
+          done
+          test "$bad" -eq 0
+
       # The tauri CLI runs a workspace-level `pnpm install --production` deps
       # check that executes the repo root postinstall (lefthook) and fails
       # without devDependencies. Hide the workspace declarations around the
