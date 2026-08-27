@@ -125,8 +125,10 @@ impl DshHandle {
     }
 
     async fn spawn_child(&self, app: AppHandle) -> Result<Child, String> {
+        append_startup_log("spawn_child: begin");
         self.ensure_home_node_modules()?;
         crate::setup::ensure_default_plugins(&app)?;
+        append_startup_log("spawn_child: default plugins ready");
         let mut cmd = Command::new(&self.node_path);
         cmd.arg(&self.dsh_bin)
             .arg("web")
@@ -158,6 +160,21 @@ impl DshHandle {
         let path_value = std::env::join_paths(&path_parts).map_err(|e| e.to_string())?;
         cmd.env("PATH", &path_value);
         no_window(&mut cmd);
+        // Startup log in the dsh home (provably writable — the profile patch
+        // was just written there), appended to at every failure point. The
+        // app log dir can silently fail on a partially-installed bundle and
+        // has swallowed every diagnostic in this chain before.
+        let startup_log = crate::setup::dsh_home().join("desktop-startup.log");
+        let _ = std::fs::create_dir_all(&crate::setup::dsh_home());
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&startup_log)
+            .and_then(|mut file| {
+                use std::io::Write;
+                writeln!(file, "spawn: node={} bin={} cwd={:?} PATH={}",
+                    self.node_path.display(), self.dsh_bin.display(), workdir, path_value.to_string_lossy())
+            });
         // Diagnostics: record exactly what is about to be spawned.
         if let Ok(log_dir) = app.path().app_log_dir() {
             let _ = std::fs::create_dir_all(&log_dir);
@@ -178,6 +195,8 @@ impl DshHandle {
             Err(e) => {
                 // Persist the failure for diagnostics: the GUI error banner is
                 // easy to miss while the app is starting.
+                append_startup_log(&format!("spawn FAILED: {e}\nnode={}\nbin={}",
+                    self.node_path.display(), self.dsh_bin.display()));
                 if let Ok(log_dir) = app.path().app_log_dir() {
                     let _ = std::fs::create_dir_all(&log_dir);
                     let _ = std::fs::write(
@@ -390,6 +409,21 @@ fn no_window(cmd: &mut tokio::process::Command) {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+}
+
+/// Append one line to `~/.dsh/desktop-startup.log`, which the shell can
+/// write even when the app log dir is unavailable; never fails the caller.
+fn append_startup_log(message: &str) {
+    let startup_log = crate::setup::dsh_home().join("desktop-startup.log");
+    let _ = std::fs::create_dir_all(&crate::setup::dsh_home());
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&startup_log)
+        .and_then(|mut file| {
+            use std::io::Write;
+            writeln!(file, "{message}")
+        });
 }
 
 /// Windows verbatim paths (`\\?\C:\...`, produced by canonicalization inside
