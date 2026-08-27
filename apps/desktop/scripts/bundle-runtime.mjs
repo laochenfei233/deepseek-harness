@@ -15,7 +15,7 @@
 // runner platform so each matrix job bundles its own runtime.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, cpSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, cpSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync, openSync, readSync, closeSync } from 'node:fs';
 import { createWriteStream } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -226,6 +226,7 @@ async function deployDsh() {
   patchBrokenLinks(repo);
   patchMissingPeers(repo);
   if (PLATFORM === 'linux') pruneForeignLinuxPlatformPackages();
+  if (PLATFORM === 'mac') pruneForeignMacNativeModules();
   // Last: flattenClosure and the patch passes rebuild node_modules from the
   // store, which would overwrite an earlier dist patch.
   injectNotificationBridge(distDest);
@@ -335,6 +336,61 @@ function pruneForeignLinuxPlatformPackages() {
   };
   walk(topNm);
   step(`pruned ${hits.length + subHits} foreign/musl path(s) from dsh closure`);
+}
+
+// macOS closures carry dead native files: Windows-only binaries (node-pty's
+// conpty DLLs are renamed to .node and shipped on every platform) and
+// wrong-arch prebuild copies left by the workspace install. Loading an arm64
+// pty.node from an x64 node crashes at startup, so delete every *.node whose
+// architecture does not cover the bundle target (PE/ELF/unknown are not
+// loadable on macOS and go too).
+function pruneForeignMacNativeModules() {
+  const topNm = join(DSH_DIR, 'node_modules');
+  // CPU_TYPE_X86_64 = 0x01000007, CPU_TYPE_ARM64 = 0x0100000c (masked below).
+  const target = ARCH === 'x64' ? 0x07 : 0x0c;
+  let removed = 0;
+  const visit = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(full);
+      } else if (entry.name.endsWith('.node') && !machoCovers(full, target)) {
+        rmSync(full, { force: true });
+        removed += 1;
+      }
+    }
+  };
+  visit(topNm);
+  step(`pruned ${removed} foreign-arch native module(s) from macOS closure`);
+}
+
+// True when the file is a Mach-O (thin or fat) covering `cputype` (the masked
+// CPU type). Parses the header directly instead of shelling out to `file`/`lipo`.
+function machoCovers(file, cputype) {
+  const fd = openSync(file, 'r');
+  const buf = Buffer.alloc(4096);
+  let n = 0;
+  try {
+    n = readSync(fd, buf, 0, 4096, 0);
+  } finally {
+    closeSync(fd);
+  }
+  const head = buf.subarray(0, n);
+  if (n < 8) return false;
+  const magic = head.readUInt32BE(0);
+  const covers = (value) => (value & 0x00ff_ffff) === cputype;
+  if (magic === 0xfeedface || magic === 0xfeedfacf) return covers(head.readUInt32BE(4));
+  if (magic === 0xcefaedfe || magic === 0xcffaedfe) return covers(head.readUInt32LE(4));
+  if (magic === 0xcafebabe && n >= 8) {
+    const count = head.readUInt32BE(4);
+    for (let i = 0; i < count; i++) {
+      const off = 8 + i * 20;
+      if (off + 4 > n) break;
+      if (covers(head.readUInt32BE(off))) return true;
+    }
+    return false;
+  }
+  return false;
 }
 
 // pnpm deploy (legacy) does not install peer-only packages: rows that only
