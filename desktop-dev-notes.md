@@ -107,6 +107,7 @@ pnpm 的 os/cpu/libc 过滤基于**运行它的 node 的架构**。mac x64 构�
 | `Bad CPU type in executable (os error 86)`（Intel Mac 装插件） | mac x64 包里是 arm64 node（`--arch x64` 未被解析） | 参数解析支持 `--flag value` 空格形式 |
 | `dsh exited during startup`（Intel Mac） | 疑似闭包 native 模块仍为 arm64（x64 node 加载 arm64 .node 崩溃） | CI "Verify closure architecture" 步骤定位；若命中需让 pnpm 显式跑在 x64 node 下 |
 | `dsh crashed repeatedly` + hub.log 每 4 秒重复 "Plugin Hub 已启动"（macOS） | `ensure_default_plugins` 无条件插入 win-terminal-inspector 的 patch 行，而 mac/linux 包不带该插件 → loader 解析不到 → 每次启动即崩 → 看门狗循环重启 | 行插入按运行时是否含该插件门控 + 移除残留行自愈（`a43d73d3b`） |
+| `directory picker failed: spawn osascript ENOENT`（macOS，同类含 npx/git 全 ENOENT） | dsh 子进程 PATH 用 `;` 拼接——Windows 正确但 mac/linux 分隔符应为 `:`，坏 PATH 使所有按 PATH 查找的子进程 spawn 失败 | 改用 `std::env::join_paths` 按平台取分隔符（`1dbb66584`） |
 | `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` | pnpm 11 deps 预检需重建 node_modules | `pnpm install --config.confirmModulesPurge=false` |
 
 ## 五、当前状态与待办
