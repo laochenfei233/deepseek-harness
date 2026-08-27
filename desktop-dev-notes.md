@@ -110,6 +110,7 @@ pnpm 的 os/cpu/libc 过滤基于**运行它的 node 的架构**。mac x64 构�
 | `directory picker failed: spawn osascript ENOENT`（macOS，同类含 npx/git 全 ENOENT） | dsh 子进程 PATH 用 `;` 拼接——Windows 正确但 mac/linux 分隔符应为 `:`，坏 PATH 使所有按 PATH 查找的子进程 spawn 失败 | 改用 `std::env::join_paths` 按平台取分隔符（`1dbb66584`） |
 | 重装后纯白屏 + 不 spawn hub + 全程无日志（macOS 全新 profile） | `ensure_default_plugins` 只在 Windows 分支（win-terminal 复制）创建 `profiles/web`；macOS 无任何代码创建它 → patch 写入 ENOENT → hub 永不 spawn；导航栏移除后窗口只剩空白 iframe，且 dsh://failed 早于前端订阅发出 → 无横幅 | 函数开头 `create_dir_all(profile)`（`128fc96a5`） |
 | `duplicate loader entry id: dsh-plugin`（插件更新后崩溃循环） | 插件更新把 dsh-plugin 写进 package.json 的 `dsh.profile.bundles`，但 `ensure_default_plugins` 每次启动仍无条件往 cordis.patch.yml 写 insert 行 → 加载器 bundle 层 + patch 层重复同一条目 → 崩溃；手动删行后重启又会被写回 | `ensure_default_plugins` 检查 `profile_bundles()`：bundles 已含 dsh-plugin 则跳过 insert 并 remove 残留行 |
+| hub 永不启动 + spawn: 日志缺失（macOS，白屏根因实锤） | `spawn_child` 把整个 PATH 环境变量作为单个元素交给 `std::env::join_paths`——POSIX 的 join_paths 校验元素含 `:`（平台分隔符）即返回 Err → `?` 静默退出 → hub 不 spawn；`join_paths` 在 spawn: 日志写入之前，故日志停在 "default plugins ready"；Windows 的 join_paths 不校验 `;` 故一直正常（平台不对称） | `std::env::split_paths` 拆回元素再并入（回归测试：POSIX 断言整串 Err + split 后 Ok） |
 | `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` | pnpm 11 deps 预检需重建 node_modules | `pnpm install --config.confirmModulesPurge=false` |
 
 ## 五、当前状态与待办

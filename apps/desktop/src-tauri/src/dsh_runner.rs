@@ -165,7 +165,11 @@ impl DshHandle {
             path_parts.push(closure.join("node_modules").join(".bin").to_string_lossy().into_owned());
         }
         if let Ok(existing) = std::env::var("PATH") {
-            path_parts.push(existing);
+            // Split the inherited PATH back into its elements before joining:
+            // join_paths rejects a single element containing the platform
+            // separator (':' on POSIX, ';' on Windows), and the whole PATH
+            // string always does.
+            path_parts.extend(std::env::split_paths(&existing).map(|p| p.to_string_lossy().into_owned()));
         }
         // join_paths uses the platform separator (";" on Windows, ":" on
         // POSIX); a literal ";" join breaks every PATH lookup in the dsh web
@@ -525,5 +529,19 @@ mod tests {
         assert!(port_free(port));
         drop(default);
         drop(next);
+    }
+
+    #[test]
+    fn join_paths_accepts_split_inherited_path() {
+        // Regression for the hub-never-spawned bug: the spawn PATH builder
+        // must split the inherited PATH into elements before joining. POSIX
+        // join_paths rejects an element containing ':' — and the whole PATH
+        // string always does — which silently killed the hub spawn on
+        // mac/linux while Windows (no ';' check) kept working.
+        let Ok(existing) = std::env::var("PATH") else { return };
+        #[cfg(not(windows))]
+        assert!(std::env::join_paths([&existing]).is_err());
+        let elements: Vec<_> = std::env::split_paths(&existing).collect();
+        assert!(std::env::join_paths(elements).is_ok());
     }
 }
