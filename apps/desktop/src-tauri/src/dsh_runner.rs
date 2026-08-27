@@ -152,7 +152,11 @@ impl DshHandle {
         if let Ok(existing) = std::env::var("PATH") {
             path_parts.push(existing);
         }
-        cmd.env("PATH", path_parts.join(";"));
+        // join_paths uses the platform separator (";" on Windows, ":" on
+        // POSIX); a literal ";" join breaks every PATH lookup in the dsh web
+        // process on mac/linux (osascript/npx/git all spawn with ENOENT).
+        let path_value = std::env::join_paths(&path_parts).map_err(|e| e.to_string())?;
+        cmd.env("PATH", &path_value);
         no_window(&mut cmd);
         // Diagnostics: record exactly what is about to be spawned.
         if let Ok(log_dir) = app.path().app_log_dir() {
@@ -164,7 +168,7 @@ impl DshHandle {
                     self.node_path.display(),
                     self.dsh_bin.display(),
                     workdir,
-                    path_parts.join(";"),
+                    path_value.to_string_lossy(),
                 ),
             );
         }
