@@ -122,7 +122,8 @@ jobs:
             else
               raw=$(file -b "$1")
             fi
-            echo "$raw" | grep -oE 'x86_64|arm64' | head -1 | sed 's/x86_64/x64/'
+            # Linux `file` prints x86-64 (hyphen), macOS lipo prints x86_64.
+            echo "$raw" | grep -oE 'x86[_-]64|arm64' | head -1 | sed 's/x86[_-]64/x64/'
           }
           node_arch=$(archs_of runtime/node/node || true)
           echo "runtime node arch: $node_arch (expected $EXPECTED)"
