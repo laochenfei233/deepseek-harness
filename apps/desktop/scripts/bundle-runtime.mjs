@@ -75,6 +75,31 @@ function step(msg) {
   console.log(`[bundle-runtime] ${msg}`);
 }
 
+// npm's scratch install created .bin shims that die with the scratch dir;
+// recreate them for the bundled node. POSIX shims resolve the node binary
+// relative to themselves (../../node after the flatten above) and Windows
+// shims use %~dp0, so the runtime stays relocatable between the build host
+// and the installed app bundle.
+function writePnpmShims(nodeDir) {
+  const binDir = join(nodeDir, 'node_modules', '.bin');
+  mkdirSync(binDir, { recursive: true });
+  const posixShim = (name) => `#!/bin/sh
+basedir=$(dirname "$(echo "$0" | sed -e 's,\\\\,/,g')")
+exec "$basedir/../../node" "$basedir/../pnpm/bin/${name}.cjs" "$@"
+`;
+  const cmdShim = (name) => `@ECHO off
+"%~dp0\\..\\..\\node.exe" "%~dp0\\..\\pnpm\\bin\\${name}.cjs" %*
+`;
+  for (const name of ['pnpm', 'pnpx']) {
+    if (PLATFORM === 'win') {
+      writeFileSync(join(binDir, `${name}.cmd`), cmdShim(name));
+    } else {
+      writeFileSync(join(binDir, name), posixShim(name), { mode: 0o755 });
+    }
+  }
+  step('wrote pnpm/pnpx .bin shims');
+}
+
 async function latestLtsV22() {
   const res = await fetch('https://nodejs.org/dist/index.json');
   if (!res.ok) throw new Error(`nodejs.org index: HTTP ${res.status}`);
@@ -221,6 +246,13 @@ async function deployDsh() {
   cpSync(pnpmPkg, join(NODE_DIR, 'node_modules', 'pnpm'), { recursive: true });
   rmSync(scratch, { recursive: true, force: true });
   step(`pnpm@${pnpmVersion} installed`);
+
+  // The scratch install's .bin shims die with it; recreate them so the market
+  // (via the shell's PATH prefix) and `dsh plugin` (via $DSH_HOME/node_modules)
+  // can execute the bundled pnpm. The shims resolve the node binary relative
+  // to themselves — the installed bundle path differs from the build path, so
+  // absolute paths would break after packaging.
+  writePnpmShims(NODE_DIR);
 
   flattenClosure();
   patchBrokenLinks(repo);
