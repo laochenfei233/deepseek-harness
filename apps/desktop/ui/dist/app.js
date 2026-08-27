@@ -1,8 +1,11 @@
 // Shell page logic: first-run gate, dsh lifecycle events, and the
 // host <-> iframe bridge (native notifications and default-browser links).
 // The top navigation bar is intentionally gone; the dsh UI owns its chrome.
+// The hub port is delivered by the Rust side through dsh://ready (it picks a
+// free port when the default 3081 is occupied); the constant below is only
+// the plain-browser fallback.
 
-const DSH_ORIGIN = 'http://127.0.0.1:3081';
+const DEFAULT_ORIGIN = 'http://127.0.0.1:3081';
 
 const frame = document.getElementById('dsh-frame');
 const banner = document.getElementById('error-banner');
@@ -20,8 +23,8 @@ function hideError() {
   banner.classList.add('hidden');
 }
 
-function loadUi() {
-  frame.src = DSH_ORIGIN;
+function loadUi(port) {
+  frame.src = port === undefined ? DEFAULT_ORIGIN : 'http://127.0.0.1:' + port;
 }
 
 // The dsh iframe's injected host bridge posts here (source
@@ -47,6 +50,7 @@ document.getElementById('btn-retry').addEventListener('click', () => {
 window.addEventListener('message', handleHostBridge);
 
 (async () => {
+  let bridge = true;
   try {
     const { initialized } = await invoke('first_run_state');
     if (!initialized) {
@@ -55,14 +59,28 @@ window.addEventListener('message', handleHostBridge);
     }
   } catch {
     // Tauri bridge unavailable (plain browser preview): show the UI anyway.
+    bridge = false;
   }
 
-  loadUi();
-
-  listen('dsh://ready', () => {
-    hideError();
+  if (!bridge) {
     loadUi();
+    return;
+  }
+
+  // The hub may already be up (surviving restarts): ask for its port instead
+  // of waiting for the next dsh://ready.
+  try {
+    const status = await invoke('dsh_status');
+    if (status.running) loadUi(status.port);
+  } catch {
+    // dsh_status unavailable; the ready event below covers this.
+  }
+
+  listen('dsh://ready', (e) => {
+    hideError();
+    loadUi(e.payload);
   });
+  listen('dsh://restarted-by-plugin', (e) => loadUi(e.payload));
   listen('dsh://failed', (e) => {
     showError(String(e.payload ?? 'dsh 服务启动失败'));
   });

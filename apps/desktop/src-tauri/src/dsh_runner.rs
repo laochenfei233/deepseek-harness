@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -17,12 +17,15 @@ use crate::INTERNAL_PORT;
 
 const RESTART_LIMIT: u32 = 3;
 const LOG_NAME: &str = "dsh-web.log";
+/// Upper bound of the fallback port scan when `INTERNAL_PORT` is occupied.
+const PORT_SCAN_LIMIT: u16 = 50;
 
 /// Handle to the managed dsh child process. `child` is `None` while the
 /// process is down and about to be (or already) restarted.
 pub struct DshHandle {
     child: Arc<Mutex<Option<Child>>>,
     stopping: Arc<AtomicBool>,
+    port: Arc<AtomicU16>,
     node_path: PathBuf,
     dsh_bin: PathBuf,
 }
@@ -34,12 +37,14 @@ impl DshHandle {
         let handle = Self {
             child: Arc::new(Mutex::new(None)),
             stopping: Arc::new(AtomicBool::new(false)),
+            port: Arc::new(AtomicU16::new(INTERNAL_PORT)),
             node_path,
             dsh_bin,
         };
         let loop_handle = Self {
             child: handle.child.clone(),
             stopping: handle.stopping.clone(),
+            port: handle.port.clone(),
             node_path: handle.node_path.clone(),
             dsh_bin: handle.dsh_bin.clone(),
         };
@@ -57,19 +62,20 @@ impl DshHandle {
             if self.stopping.load(Ordering::SeqCst) {
                 return;
             }
-            let child = match self.spawn_child(app.clone()).await {
-                Ok(child) => child,
+            let (child, port) = match self.spawn_child(app.clone()).await {
+                Ok(owned) => owned,
                 Err(err) => {
                     let _ = app.emit("dsh://failed", err);
                     return;
                 }
             };
             *self.child.lock().await = Some(child);
+            self.port.store(port, Ordering::SeqCst);
 
             let ready = {
                 let mut guard = self.child.lock().await;
                 match guard.as_mut() {
-                    Some(child) => wait_ready(INTERNAL_PORT, child, self.stopping.clone()).await,
+                    Some(child) => wait_ready(port, child, self.stopping.clone()).await,
                     None => false,
                 }
             };
@@ -83,7 +89,7 @@ impl DshHandle {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
             }
-            let _ = app.emit("dsh://ready", ());
+            let _ = app.emit("dsh://ready", port);
 
             // Wait for the child to exit (or the stopping flag).
             loop {
@@ -109,9 +115,9 @@ impl DshHandle {
 
             // the dsh-plugin market may restart the server itself; in that case the port
             // stays occupied and we must not spawn a rival.
-            if port_open(INTERNAL_PORT) {
-                let _ = app.emit("dsh://restarted-by-plugin", ());
-                wait_port_closed(INTERNAL_PORT, self.stopping.clone()).await;
+            if port_open(port) {
+                let _ = app.emit("dsh://restarted-by-plugin", port);
+                wait_port_closed(port, self.stopping.clone()).await;
                 continue;
             }
             if restarts >= RESTART_LIMIT {
@@ -124,16 +130,23 @@ impl DshHandle {
         }
     }
 
-    async fn spawn_child(&self, app: AppHandle) -> Result<Child, String> {
+    async fn spawn_child(&self, app: AppHandle) -> Result<(Child, u16), String> {
         append_startup_log("spawn_child: begin");
         self.ensure_home_node_modules()?;
         crate::setup::ensure_default_plugins(&app)?;
         append_startup_log("spawn_child: default plugins ready");
+        let port = match select_port() {
+            Ok(port) => port,
+            Err(err) => {
+                append_startup_log(&format!("select_port failed: {err}"));
+                return Err(err);
+            }
+        };
         let mut cmd = Command::new(&self.node_path);
         cmd.arg(&self.dsh_bin)
             .arg("web")
             .arg("--port")
-            .arg(INTERNAL_PORT.to_string())
+            .arg(port.to_string())
             .arg("--no-open")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -215,7 +228,7 @@ impl DshHandle {
             child.stderr.take(),
             app.path().app_log_dir().ok().map(|d| d.join("dsh-web.err.log")),
         );
-        Ok(child)
+        Ok((child, port))
     }
 
     /// Stop the dsh process for good (app exit, tray Quit, or explicit
@@ -243,7 +256,7 @@ impl DshHandle {
     }
 
     pub fn port(&self) -> u16 {
-        INTERNAL_PORT
+        self.port.load(Ordering::SeqCst)
     }
 
     /// The web profile's loader resolves bundle rows (`@deepseek-ai/dsh-base`,
@@ -297,6 +310,31 @@ impl DshHandle {
 
 fn port_open(port: u16) -> bool {
     std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+}
+
+/// Choose the port for the next `dsh web` spawn: the default `INTERNAL_PORT`
+/// when it accepts a bind, otherwise the first free port in the scan range.
+/// Selection runs on every spawn, so a restart returns to the default as soon
+/// as the external occupier releases it. The probe listener is dropped before
+/// the process binds, leaving a tiny bind race that the supervisor's
+/// `wait_ready` restart path absorbs.
+fn select_port() -> Result<u16, String> {
+    if port_free(INTERNAL_PORT) {
+        return Ok(INTERNAL_PORT);
+    }
+    let last = INTERNAL_PORT + PORT_SCAN_LIMIT;
+    for port in (INTERNAL_PORT + 1)..=last {
+        if port_free(port) {
+            return Ok(port);
+        }
+    }
+    Err(format!("no free port in {}..={last} for the dsh web", INTERNAL_PORT + 1))
+}
+
+/// A port is free when a loopback bind succeeds; the listener is dropped
+/// immediately, leaving the port for the spawned process.
+fn port_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
 async fn wait_ready(port: u16, child: &mut Child, stopping: Arc<AtomicBool>) -> bool {
@@ -465,4 +503,31 @@ pub fn open_ui(app: AppHandle) -> Result<(), String> {
         let _ = window.set_focus();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_port_returns_default_when_free() {
+        if port_free(INTERNAL_PORT) {
+            assert_eq!(select_port().unwrap(), INTERNAL_PORT);
+        }
+    }
+
+    #[test]
+    fn select_port_skips_occupied_ports() {
+        // When both the default and the first fallback are occupied, the scan
+        // must move past them and return a port that is actually bindable.
+        let default = std::net::TcpListener::bind(("127.0.0.1", INTERNAL_PORT));
+        let next = std::net::TcpListener::bind(("127.0.0.1", INTERNAL_PORT + 1));
+        let (Ok(default), Ok(next)) = (default, next) else { return };
+        let port = select_port().unwrap();
+        assert_ne!(port, INTERNAL_PORT);
+        assert_ne!(port, INTERNAL_PORT + 1);
+        assert!(port_free(port));
+        drop(default);
+        drop(next);
+    }
 }
