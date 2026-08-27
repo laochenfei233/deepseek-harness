@@ -177,17 +177,13 @@ impl DshHandle {
         // was just written there), appended to at every failure point. The
         // app log dir can silently fail on a partially-installed bundle and
         // has swallowed every diagnostic in this chain before.
-        let startup_log = crate::setup::dsh_home().join("desktop-startup.log");
-        let _ = std::fs::create_dir_all(&crate::setup::dsh_home());
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&startup_log)
-            .and_then(|mut file| {
-                use std::io::Write;
-                writeln!(file, "spawn: node={} bin={} cwd={:?} PATH={}",
-                    self.node_path.display(), self.dsh_bin.display(), workdir, path_value.to_string_lossy())
-            });
+        append_startup_log(&format!(
+            "spawn: node={} bin={} cwd={:?} PATH={}",
+            self.node_path.display(),
+            self.dsh_bin.display(),
+            workdir,
+            path_value.to_string_lossy(),
+        ));
         // Diagnostics: record exactly what is about to be spawned.
         if let Ok(log_dir) = app.path().app_log_dir() {
             let _ = std::fs::create_dir_all(&log_dir);

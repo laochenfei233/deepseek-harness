@@ -62,19 +62,13 @@ window.addEventListener('message', handleHostBridge);
     bridge = false;
   }
 
-  if (!bridge) {
-    loadUi();
-    return;
-  }
+  // Load the default port right away (the hub normally serves there), then
+  // converge on the real port through the event stream and a dsh_status poll
+  // loop. Polling also turns a dead hub into a visible error banner instead of
+  // a permanently blank window when the ready event is missed.
+  loadUi();
 
-  // The hub may already be up (surviving restarts): ask for its port instead
-  // of waiting for the next dsh://ready.
-  try {
-    const status = await invoke('dsh_status');
-    if (status.running) loadUi(status.port);
-  } catch {
-    // dsh_status unavailable; the ready event below covers this.
-  }
+  if (!bridge) return;
 
   listen('dsh://ready', (e) => {
     hideError();
@@ -84,4 +78,21 @@ window.addEventListener('message', handleHostBridge);
   listen('dsh://failed', (e) => {
     showError(String(e.payload ?? 'dsh 服务启动失败'));
   });
+
+  // 60 seconds of polling; each round switches to the live port when the hub
+  // answers. The loop ends with a visible failure rather than a blank window.
+  for (let round = 0; round < 30; round++) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    try {
+      const status = await invoke('dsh_status');
+      if (status.running) {
+        loadUi(status.port);
+        hideError();
+        return;
+      }
+    } catch {
+      // dsh_status unavailable; keep polling until the round budget ends.
+    }
+  }
+  showError('dsh 服务启动失败');
 })();
