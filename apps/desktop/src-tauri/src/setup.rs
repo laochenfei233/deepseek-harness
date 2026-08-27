@@ -249,8 +249,19 @@ pub(crate) fn ensure_default_plugins(app: &AppHandle) -> Result<(), String> {
         .and_then(|raw| serde_yaml::from_str(&raw).ok())
         .map(sanitize_rows)
         .unwrap_or_default();
-    upsert_patch_row(&mut rows, "dsh-plugin",
-        "insert:\n  - id: dsh-plugin\n    name: dsh-plugin\n")?;
+    // The plugin manager (`dsh plugin` / the market) records dsh-plugin in
+    // the profile's `dsh.profile.bundles` on add/update; the loader composes
+    // bundle layers before the patch layer, so inserting the same entry here
+    // makes it fail with "duplicate loader entry id" and the hub crashes on
+    // every launch. Only the patch layer owns dsh-plugin when the bundle
+    // layer does not list it; a stale patch row an older shell wrote
+    // unconditionally is dropped instead.
+    if profile_bundles(&profile).iter().any(|bundle| bundle == "dsh-plugin") {
+        remove_patch_row(&mut rows, "dsh-plugin");
+    } else {
+        upsert_patch_row(&mut rows, "dsh-plugin",
+            "insert:\n  - id: dsh-plugin\n    name: dsh-plugin\n")?;
+    }
     if win_present {
         if !has_patch_row(&rows, "win-terminal-inspector") {
             rows.push(serde_yaml::from_str(
@@ -330,6 +341,23 @@ fn remove_patch_row(rows: &mut Vec<Yaml>, id: &str) {
             .and_then(|ins| ins.as_sequence())
             .is_some_and(|seq| seq.iter().any(|e| e.get("id").and_then(Yaml::as_str) == Some(id)))
     });
+}
+
+/// The profile's `dsh.profile.bundles` layer list from `package.json` — the
+/// rows the plugin manager records there. The loader composes bundle layers
+/// before the patch layer, so a bundle-listed plugin must not be re-inserted
+/// by the patch below.
+fn profile_bundles(profile: &Path) -> Vec<String> {
+    fs::read_to_string(profile.join("package.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|value| value["dsh"]["profile"]["bundles"].as_array().cloned())
+        .map(|rows| {
+            rows.into_iter()
+                .filter_map(|row| row.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn has_patch_row(rows: &[Yaml], id: &str) -> bool {
