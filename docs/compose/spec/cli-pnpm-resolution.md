@@ -8,6 +8,8 @@ commits: bdabcc741..03012546d
 
 # CLI pnpm Resolution
 
+English | [中文](cli-pnpm-resolution.zh.md)
+
 ## Report
 
 **What was built** — bundle-runtime writes `pnpm`/`pnpx` shims into `runtime/node/node_modules/.bin` after the pnpm package copy (POSIX shims resolving the node binary relatively, `.cmd` shims via `%~dp0`), so the market (through the shell's PATH prefix) and the CLI can execute the bundled pnpm. The CLI's `resolvePnpm()` probes candidates in order — `PNPM_BINARY` override, `pnpm` on PATH, then the runtime-sibling shim `<runtime>/node/node_modules/.bin/pnpm` derived from `INSTALL_ANCHOR` — accepting the first whose `--version` probe exits 0, and prints `npm install -g pnpm` / `corepack enable pnpm` guidance when none works. Review caught the dead `$DSH_HOME` junction candidate (the junction targets the deploy closure, which has no pnpm) and replaced it with the runtime-sibling shim.

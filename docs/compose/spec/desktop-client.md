@@ -8,6 +8,8 @@ commits: 57da7798a..9176ccb11
 
 # Desktop Client（Tauri 全平台桌面客户端）
 
+English | [中文](desktop-client.zh.md)
+
 ## Report
 
 **What was built** — 桌面端内置插件市场由 `dshmarket` 切换为 `dsh-plugin`（npm 包，对应 dshplugin/dsh-plugin-hub 插件中心）：`scripts/bundle-runtime.mjs` 在打包期把 `dsh-plugin@latest` 装进 `runtime/plugins/dsh-plugin`（`--prod --ignore-scripts`，flatten 闭包，pnpm-workspace.yaml 置 `minimumReleaseAge: 0` 保证跟踪最新发行），首启时 `setup.rs::ensure_default_plugins` 复制进 web profile 的 `plugins/` 并写入 `cordis.patch.yml` insert 行（`id: dsh-plugin`，name `./plugins/dsh-plugin/node_modules/dsh-plugin/lib/index.js`，与包 `main` 一致）。内容链接改为系统默认浏览器打开：主窗口改由 `WebviewWindowBuilder` 构建（`tauri.conf.json` `create: false`）并挂 `on_new_window`，http/https/mailto/tel 经 `tauri-plugin-opener` 外开、其余 scheme 拒绝、弹窗一律 `Deny`，壳页面、向导页与 dsh iframe 内的 `target="_blank"` / `window.open` 均不再在应用内开新窗口。首启向导可选插件默认全部不勾选；顶部导航栏已移除（dsh UI 自带导航），`dsh-tauri` 导航桥条目随之从向导删除。

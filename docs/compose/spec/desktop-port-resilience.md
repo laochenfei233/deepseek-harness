@@ -8,6 +8,8 @@ commits: bdabcc741..03012546d
 
 # Desktop Port Resilience
 
+English | [中文](desktop-port-resilience.zh.md)
+
 ## Report
 
 **What was built** — Port selection moved into the supervisor and runs on every spawn: `select_port()` returns 3081 when it accepts a bind, otherwise the first bindable port in 3082..=3131. `spawn_child` returns the chosen port; `supervise` threads it through `wait_ready`, the port-takeover check, and the `dsh://ready` / `dsh://restarted-by-plugin` event payloads; `DshHandle` tracks the live port for `dsh_status`. The frontend probes `dsh_status` for an already-running hub and otherwise loads the iframe from the ready-event port, keeping a plain 3081 fallback only for browser previews without the Tauri bridge. The build-time CSP widened to loopback port wildcards (`http://127.0.0.1:*`, `ws://127.0.0.1:*`) since a compiled-in CSP cannot change at runtime.
