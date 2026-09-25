@@ -10,16 +10,16 @@ mod dsh_runner;
 mod setup;
 mod tray;
 
-use tauri::Manager;
 use tauri::webview::{NewWindowFeatures, NewWindowResponse};
+use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
 use dsh_runner::DshHandle;
 
-/// Default port the bundled `dsh web` process listens on. When occupied, the
-/// shell scans upward for a free port and delivers the actual port to the
-/// frontend through the `dsh://ready` event. CLI users who run their own
-/// `dsh web` keep the default 3080.
+/// Default loopback port for the bundled `dsh web` process. When occupied, the
+/// shell scans upward for a free port and delivers the authenticated launch
+/// URL through `dsh://ready`. CLI users who run their own `dsh web` keep the
+/// default 3080.
 pub const INTERNAL_PORT: u16 = 3081;
 
 /// The main window is declared in `tauri.conf.json` with `"create": false`
@@ -60,7 +60,10 @@ fn is_externally_openable(url: &tauri::Url) -> bool {
 /// Without a handler the platform webview drops these requests on the floor,
 /// which is what made `target="_blank"` links dead in the app: WebView2 marks
 /// the request handled with nothing to show, so the click does nothing at all.
-fn open_new_window_externally(app: &tauri::AppHandle, url: &tauri::Url) -> NewWindowResponse<tauri::Wry> {
+fn open_new_window_externally(
+    app: &tauri::AppHandle,
+    url: &tauri::Url,
+) -> NewWindowResponse<tauri::Wry> {
     let openable = is_externally_openable(url);
     if openable {
         let opened = app.opener().open_url(url.as_str(), None::<&str>).is_ok()
@@ -86,11 +89,17 @@ fn open_with_os(url: &str) -> std::io::Result<()> {
     }
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open").arg(url).status().map(|_| ())
+        std::process::Command::new("open")
+            .arg(url)
+            .status()
+            .map(|_| ())
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        std::process::Command::new("xdg-open").arg(url).status().map(|_| ())
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .status()
+            .map(|_| ())
     }
 }
 
@@ -106,7 +115,10 @@ fn log_new_window(app: &tauri::AppHandle, url: &tauri::Url, openable: bool, open
         {
             use std::io::Write;
             use std::time::{SystemTime, UNIX_EPOCH};
-            let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
             let _ = writeln!(file, "{ts} {url} openable={openable} opened={opened}");
         }
     }
@@ -161,6 +173,7 @@ pub fn run() {
             setup::install_plugin,
             setup::apply_first_run,
             dsh_runner::dsh_status,
+            dsh_runner::authenticate_webview,
             dsh_runner::restart_dsh,
             dsh_runner::open_ui,
         ])

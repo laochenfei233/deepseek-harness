@@ -1,15 +1,21 @@
 //! Owns the bundled `dsh web` child process: spawn, port health probe,
 //! automatic crash restart, and clean teardown on app exit.
 
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::Arc;
+use std::sync::Mutex as LaunchUrlMutex;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::AsyncRead;
+use tauri::webview::{
+    cookie::{time::Duration as CookieDuration, SameSite},
+    Cookie,
+};
+use tauri::{AppHandle, Emitter, Manager, Url};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
@@ -26,8 +32,15 @@ pub struct DshHandle {
     child: Arc<Mutex<Option<Child>>>,
     stopping: Arc<AtomicBool>,
     port: Arc<AtomicU16>,
+    launch_url: Arc<LaunchUrlMutex<Option<String>>>,
     node_path: PathBuf,
     dsh_bin: PathBuf,
+}
+
+/// The authenticated Web origin handed to the desktop iframe.
+#[derive(Clone, Serialize)]
+pub struct DshEndpoint {
+    pub url: Option<String>,
 }
 
 impl DshHandle {
@@ -38,6 +51,7 @@ impl DshHandle {
             child: Arc::new(Mutex::new(None)),
             stopping: Arc::new(AtomicBool::new(false)),
             port: Arc::new(AtomicU16::new(INTERNAL_PORT)),
+            launch_url: Arc::new(LaunchUrlMutex::new(None)),
             node_path,
             dsh_bin,
         };
@@ -45,6 +59,7 @@ impl DshHandle {
             child: handle.child.clone(),
             stopping: handle.stopping.clone(),
             port: handle.port.clone(),
+            launch_url: handle.launch_url.clone(),
             node_path: handle.node_path.clone(),
             dsh_bin: handle.dsh_bin.clone(),
         };
@@ -71,11 +86,14 @@ impl DshHandle {
             };
             *self.child.lock().await = Some(child);
             self.port.store(port, Ordering::SeqCst);
+            *self.launch_url.lock().expect("launch-url mutex") = None;
 
             let ready = {
                 let mut guard = self.child.lock().await;
                 match guard.as_mut() {
-                    Some(child) => wait_ready(port, child, self.stopping.clone()).await,
+                    Some(child) => {
+                        wait_ready(port, child, self.stopping.clone(), &self.launch_url).await
+                    }
                     None => false,
                 }
             };
@@ -86,10 +104,12 @@ impl DshHandle {
                 // Process died before the port ever answered.
                 let _ = app.emit("dsh://failed", "dsh exited during startup");
                 self.child.lock().await.take();
+                *self.launch_url.lock().expect("launch-url mutex") = None;
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
             }
-            let _ = app.emit("dsh://ready", port);
+            let launch_url = self.launch_url.lock().expect("launch-url mutex").clone();
+            let _ = app.emit("dsh://ready", DshEndpoint { url: launch_url });
 
             // Wait for the child to exit (or the stopping flag).
             loop {
@@ -109,15 +129,37 @@ impl DshHandle {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
             self.child.lock().await.take();
+            *self.launch_url.lock().expect("launch-url mutex") = None;
             if self.stopping.load(Ordering::SeqCst) {
                 return;
             }
 
-            // the dsh-plugin market may restart the server itself; in that case the port
-            // stays occupied and we must not spawn a rival.
+            // The plugin market restarts `dsh` as a detached process whose stdout
+            // goes to its own log. Capture the launch URL from the bytes it adds;
+            // a stale token in that log must never reach the iframe.
             if port_open(port) {
-                let _ = app.emit("dsh://restarted-by-plugin", port);
+                let baseline = external_log_offset(port).await;
+                let url = wait_external_launch_url(
+                    port,
+                    baseline,
+                    self.stopping.clone(),
+                    &self.launch_url,
+                )
+                .await;
+                if self.stopping.load(Ordering::SeqCst) {
+                    return;
+                }
+                let Some(url) = url else {
+                    let _ = app.emit(
+                        "dsh://failed",
+                        "the plugin-restarted dsh did not print an authenticated URL",
+                    );
+                    wait_port_closed(port, self.stopping.clone()).await;
+                    continue;
+                };
+                let _ = app.emit("dsh://ready", DshEndpoint { url: Some(url) });
                 wait_port_closed(port, self.stopping.clone()).await;
+                *self.launch_url.lock().expect("launch-url mutex") = None;
                 continue;
             }
             if restarts >= RESTART_LIMIT {
@@ -151,7 +193,11 @@ impl DshHandle {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         // Run the CLI from its package root so relative config lookups work.
-        let workdir = self.dsh_bin.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf());
+        let workdir = self
+            .dsh_bin
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf());
         if let Some(root) = &workdir {
             cmd.current_dir(root);
         }
@@ -159,17 +205,30 @@ impl DshHandle {
         // closure's bins first on PATH so `dsh plugin` works offline.
         let mut path_parts: Vec<String> = Vec::new();
         if let Some(node_dir) = self.node_path.parent() {
-            path_parts.push(node_dir.join("node_modules").join(".bin").to_string_lossy().into_owned());
+            path_parts.push(
+                node_dir
+                    .join("node_modules")
+                    .join(".bin")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
         }
         if let Some(closure) = self.dsh_bin.parent().and_then(|p| p.parent()) {
-            path_parts.push(closure.join("node_modules").join(".bin").to_string_lossy().into_owned());
+            path_parts.push(
+                closure
+                    .join("node_modules")
+                    .join(".bin")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
         }
         if let Ok(existing) = std::env::var("PATH") {
             // Split the inherited PATH back into its elements before joining:
             // join_paths rejects a single element containing the platform
             // separator (':' on POSIX, ';' on Windows), and the whole PATH
             // string always does.
-            path_parts.extend(std::env::split_paths(&existing).map(|p| p.to_string_lossy().into_owned()));
+            path_parts
+                .extend(std::env::split_paths(&existing).map(|p| p.to_string_lossy().into_owned()));
         }
         // join_paths uses the platform separator (";" on Windows, ":" on
         // POSIX); a literal ";" join breaks every PATH lookup in the dsh web
@@ -202,31 +261,44 @@ impl DshHandle {
                 ),
             );
         }
+        *self.launch_url.lock().expect("launch-url mutex") = None;
         let spawn_result = cmd.spawn();
         let mut child = match spawn_result {
             Ok(child) => child,
             Err(e) => {
                 // Persist the failure for diagnostics: the GUI error banner is
                 // easy to miss while the app is starting.
-                append_startup_log(&format!("spawn FAILED: {e}\nnode={}\nbin={}",
-                    self.node_path.display(), self.dsh_bin.display()));
+                append_startup_log(&format!(
+                    "spawn FAILED: {e}\nnode={}\nbin={}",
+                    self.node_path.display(),
+                    self.dsh_bin.display()
+                ));
                 if let Ok(log_dir) = app.path().app_log_dir() {
                     let _ = std::fs::create_dir_all(&log_dir);
                     let _ = std::fs::write(
                         log_dir.join("spawn-error.log"),
-                        format!("spawn dsh failed: {e}\nnode={}\nbin={}\n", self.node_path.display(), self.dsh_bin.display()),
+                        format!(
+                            "spawn dsh failed: {e}\nnode={}\nbin={}\n",
+                            self.node_path.display(),
+                            self.dsh_bin.display()
+                        ),
                     );
                 }
                 return Err(format!("spawn dsh failed: {e}"));
             }
         };
-        forward_to_log(
+        forward_stdout(
             child.stdout.take(),
             app.path().app_log_dir().ok().map(|d| d.join(LOG_NAME)),
+            port,
+            self.launch_url.clone(),
         );
         forward_to_log(
             child.stderr.take(),
-            app.path().app_log_dir().ok().map(|d| d.join("dsh-web.err.log")),
+            app.path()
+                .app_log_dir()
+                .ok()
+                .map(|d| d.join("dsh-web.err.log")),
         );
         Ok((child, port))
     }
@@ -328,7 +400,10 @@ fn select_port() -> Result<u16, String> {
             return Ok(port);
         }
     }
-    Err(format!("no free port in {}..={last} for the dsh web", INTERNAL_PORT + 1))
+    Err(format!(
+        "no free port in {}..={last} for the dsh web",
+        INTERNAL_PORT + 1
+    ))
 }
 
 /// A port is free when a loopback bind succeeds; the listener is dropped
@@ -337,13 +412,19 @@ fn port_free(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
-async fn wait_ready(port: u16, child: &mut Child, stopping: Arc<AtomicBool>) -> bool {
+async fn wait_ready(
+    port: u16,
+    child: &mut Child,
+    stopping: Arc<AtomicBool>,
+    launch_url: &Arc<LaunchUrlMutex<Option<String>>>,
+) -> bool {
     let mut attempts = 0u32;
     while attempts < 120 {
         if stopping.load(Ordering::SeqCst) {
             return false;
         }
-        if port_open(port) {
+        let authenticated = launch_url.lock().expect("launch-url mutex").is_some();
+        if authenticated && port_open(port) {
             return true;
         }
         if let Ok(Some(_)) = child.try_wait() {
@@ -365,6 +446,107 @@ async fn wait_port_closed(port: u16, stopping: Arc<AtomicBool>) {
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+}
+
+/// Extract the loopback launch URL printed by `dsh web`; it is the only
+/// stdout value the desktop shell may trust.
+fn launch_url_from_line(line: &str, port: u16) -> Option<String> {
+    let candidate = line
+        .split_whitespace()
+        .find(|value| value.starts_with("http://") && value.contains("token="))?;
+    let url = Url::parse(candidate).ok()?;
+    if url.scheme() != "http"
+        || url.host_str() != Some("127.0.0.1")
+        || url.port() != Some(port)
+        || url.query_pairs().filter(|(key, _)| key == "token").count() != 1
+    {
+        return None;
+    }
+    Some(candidate.to_owned())
+}
+
+/// Forward stdout while retaining the current process's launch URL.
+fn forward_stdout<S>(
+    stream: Option<S>,
+    path: Option<PathBuf>,
+    port: u16,
+    launch_url: Arc<LaunchUrlMutex<Option<String>>>,
+) where
+    S: AsyncRead + Unpin + Send + 'static,
+{
+    let Some(stream) = stream else { return };
+    let Some(path) = path else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    tauri::async_runtime::spawn(async move {
+        let mut log = match tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await
+        {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let mut lines = tokio::io::BufReader::new(stream).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if let Some(url) = launch_url_from_line(&line, port) {
+                *launch_url.lock().expect("launch-url mutex") = Some(url);
+            }
+            let _ = log.write_all(format!("{line}\n").as_bytes()).await;
+        }
+    });
+}
+
+/// Byte offset of the plugin market's restart log, so its next process can add
+/// a new URL without the reader accepting a token from an older process.
+async fn external_log_offset(port: u16) -> u64 {
+    let path = crate::setup::dsh_home()
+        .join("logs")
+        .join(format!("dsh-web-{port}.log"));
+    tokio::fs::metadata(&path)
+        .await
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
+/// Read only the bytes added to the plugin restart log after `offset`.
+async fn wait_external_launch_url(
+    port: u16,
+    offset: u64,
+    stopping: Arc<AtomicBool>,
+    launch_url: &Arc<LaunchUrlMutex<Option<String>>>,
+) -> Option<String> {
+    let path = crate::setup::dsh_home()
+        .join("logs")
+        .join(format!("dsh-web-{port}.log"));
+    for _ in 0..120 {
+        if stopping.load(Ordering::SeqCst) {
+            return None;
+        }
+        if let Ok(mut file) = tokio::fs::OpenOptions::new().read(true).open(&path).await {
+            if let Ok(metadata) = file.metadata().await {
+                if metadata.len() > offset {
+                    if file.seek(std::io::SeekFrom::Start(offset)).await.is_ok() {
+                        let mut added = String::new();
+                        if file.read_to_string(&mut added).await.is_ok() {
+                            let url = added
+                                .lines()
+                                .rev()
+                                .find_map(|line| launch_url_from_line(line, port));
+                            if let Some(url) = url {
+                                *launch_url.lock().expect("launch-url mutex") = Some(url.clone());
+                                return Some(url);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    None
 }
 
 fn forward_to_log<S>(stream: Option<S>, path: Option<PathBuf>)
@@ -435,7 +617,10 @@ pub(crate) fn resolve_runtime(app: &AppHandle) -> Result<(PathBuf, PathBuf), Str
             "no bundled runtime found at {bundled_bin:?} and no built dsh CLI at {dsh_bin}"
         ));
     }
-    Ok((plain_path(&PathBuf::from(node)), plain_path(&PathBuf::from(dsh_bin))))
+    Ok((
+        plain_path(&PathBuf::from(node)),
+        plain_path(&PathBuf::from(dsh_bin)),
+    ))
 }
 
 /// The app is a GUI process (windows_subsystem = windows); spawned children
@@ -443,7 +628,6 @@ pub(crate) fn resolve_runtime(app: &AppHandle) -> Result<(PathBuf, PathBuf), Str
 fn no_window(cmd: &mut tokio::process::Command) {
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
@@ -476,10 +660,116 @@ fn plain_path(p: &Path) -> PathBuf {
     }
 }
 
+/// Cookie fields needed to install the launch exchange result in WebView2.
+#[derive(Debug)]
+struct AuthCookie {
+    name: String,
+    value: String,
+    max_age: i64,
+}
+
+/// The clean Web origin to load after the launch-token exchange.
+#[derive(Serialize)]
+pub struct WebviewSession {
+    pub url: String,
+}
+
+/// Read the sole dsh browser-session cookie from the token-exchange response.
+fn auth_cookie_from_response(response: &str) -> Option<AuthCookie> {
+    let header_block = response.split("\r\n\r\n").next()?;
+    let set_cookie = header_block.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("set-cookie")
+            .then(|| value.trim())
+    })?;
+    let (name, value) = set_cookie.split(';').next()?.split_once('=')?;
+    let name = name.trim();
+    if !name.starts_with("dsh-auth-") {
+        return None;
+    }
+    let max_age = set_cookie
+        .split(';')
+        .find_map(|attribute| {
+            let (key, value) = attribute.trim().split_once('=')?;
+            key.eq_ignore_ascii_case("max-age")
+                .then(|| value.trim().parse::<i64>().ok())
+                .flatten()
+        })
+        .unwrap_or(30 * 24 * 60 * 60);
+    Some(AuthCookie {
+        name: name.to_owned(),
+        value: value.trim().to_owned(),
+        max_age,
+    })
+}
+
+/// Exchange the one-time URL token for a browser cookie in the native store.
+/// The cookie is made usable by the embedded cross-origin iframe; a strict
+/// cookie minted by an iframe would not be sent back to the loopback server.
+#[tauri::command]
+pub async fn authenticate_webview(app: AppHandle, url: String) -> Result<WebviewSession, String> {
+    let parsed = url
+        .parse::<Url>()
+        .ok()
+        .filter(|parsed| {
+            parsed.scheme() == "http"
+                && parsed.host_str() == Some("127.0.0.1")
+                && parsed.port().is_some()
+        })
+        .ok_or("invalid dsh web launch URL")?;
+    let (cookie_parts, clean_url) = tauri::async_runtime::spawn_blocking(move || {
+        let port = parsed.port().ok_or("invalid dsh web launch URL")?;
+        let target = match parsed.query() {
+            Some(query) => format!("{}?{query}", parsed.path()),
+            None => parsed.path().to_owned(),
+        };
+        let mut stream = TcpStream::connect(("127.0.0.1", port))
+            .map_err(|e| format!("launch-token exchange failed: {e}"))?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .map_err(|e| format!("launch-token exchange failed: {e}"))?;
+        use std::io::Write;
+        stream
+            .write_all(
+                format!(
+                    "GET {target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .map_err(|e| format!("launch-token exchange failed: {e}"))?;
+        let mut response = String::new();
+        std::io::Read::read_to_string(&mut stream, &mut response)
+            .map_err(|e| format!("launch-token exchange failed: {e}"))?;
+        let cookie = auth_cookie_from_response(&response)
+            .ok_or_else(|| "launch-token response contained no dsh browser cookie".to_owned())?;
+        let mut clean = parsed;
+        clean.set_query(None);
+        clean.set_fragment(None);
+        Ok::<_, String>((cookie, clean.to_string()))
+    })
+    .await
+    .map_err(|e| format!("launch-token exchange task failed: {e}"))??;
+    let cookie = Cookie::build((cookie_parts.name, cookie_parts.value))
+        .domain("127.0.0.1")
+        .path("/")
+        .http_only(true)
+        .same_site(SameSite::None)
+        .secure(true)
+        .max_age(CookieDuration::seconds(cookie_parts.max_age))
+        .build();
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main webview unavailable")?;
+    window
+        .set_cookie(cookie)
+        .map_err(|e| format!("browser-cookie installation failed: {e}"))?;
+    Ok(WebviewSession { url: clean_url })
+}
 #[derive(Serialize)]
 pub struct DshStatus {
     pub running: bool,
     pub port: u16,
+    pub url: Option<String>,
 }
 
 #[tauri::command]
@@ -487,6 +777,7 @@ pub fn dsh_status(state: tauri::State<'_, DshHandle>) -> DshStatus {
     DshStatus {
         running: port_open(state.port()),
         port: state.port(),
+        url: state.launch_url.lock().expect("launch-url mutex").clone(),
     }
 }
 
@@ -510,6 +801,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn launch_url_parser_accepts_only_the_current_loopback_token() {
+        let good = launch_url_from_line(
+            "dsh web: http://127.0.0.1:3081/?token=abc (LAN: http://192.0.2.1:3081/?token=abc)",
+            3081,
+        );
+        assert_eq!(good.as_deref(), Some("http://127.0.0.1:3081/?token=abc"),);
+        assert_eq!(
+            launch_url_from_line("dsh web: http://127.0.0.1:3081/", 3081),
+            None
+        );
+        assert_eq!(
+            launch_url_from_line("dsh web: http://127.0.0.1:3082/?token=abc", 3081),
+            None
+        );
+        assert_eq!(
+            launch_url_from_line("dsh web: http://127.0.0.1:3081/?token=abc&token=def", 3081),
+            None
+        );
+    }
+    #[test]
+    fn auth_cookie_parser_accepts_only_dsh_session_cookies() {
+        let cookie = auth_cookie_from_response(
+            "HTTP/1.1 200 OK\r\nSet-Cookie: dsh-auth-abc123=tok; Max-Age=604800; Path=/\r\n\r\nbody",
+        )
+        .unwrap();
+        assert_eq!(cookie.name, "dsh-auth-abc123");
+        assert_eq!(cookie.value, "tok");
+        assert_eq!(cookie.max_age, 604800);
+
+        // Only dsh-auth-* cookies may reach the WebView store.
+        assert!(auth_cookie_from_response(
+            "HTTP/1.1 200 OK\r\nSet-Cookie: other=tok; Max-Age=60\r\n\r\n",
+        )
+        .is_none());
+
+        // A malformed Max-Age falls back to the session default rather than
+        // installing an immediately expired cookie.
+        let cookie = auth_cookie_from_response(
+            "HTTP/1.1 200 OK\r\nSet-Cookie: dsh-auth-abc123=tok; Max-Age=soon\r\n\r\n",
+        )
+        .unwrap();
+        assert_eq!(cookie.max_age, 30 * 24 * 60 * 60);
+    }
+
+    #[test]
     fn select_port_returns_default_when_free() {
         if port_free(INTERNAL_PORT) {
             assert_eq!(select_port().unwrap(), INTERNAL_PORT);
@@ -522,7 +858,9 @@ mod tests {
         // must move past them and return a port that is actually bindable.
         let default = std::net::TcpListener::bind(("127.0.0.1", INTERNAL_PORT));
         let next = std::net::TcpListener::bind(("127.0.0.1", INTERNAL_PORT + 1));
-        let (Ok(default), Ok(next)) = (default, next) else { return };
+        let (Ok(default), Ok(next)) = (default, next) else {
+            return;
+        };
         let port = select_port().unwrap();
         assert_ne!(port, INTERNAL_PORT);
         assert_ne!(port, INTERNAL_PORT + 1);
@@ -538,7 +876,9 @@ mod tests {
         // join_paths rejects an element containing ':' — and the whole PATH
         // string always does — which silently killed the hub spawn on
         // mac/linux while Windows (no ';' check) kept working.
-        let Ok(existing) = std::env::var("PATH") else { return };
+        let Ok(existing) = std::env::var("PATH") else {
+            return;
+        };
         #[cfg(not(windows))]
         assert!(std::env::join_paths([&existing]).is_err());
         let elements: Vec<_> = std::env::split_paths(&existing).collect();
